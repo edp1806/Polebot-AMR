@@ -101,6 +101,11 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
+        monitor_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
       Mass Properties:
         Inertia: false
         Mass: false
@@ -130,9 +135,19 @@ Visualization Manager:
           Value: true
         casterwhl_rr_link:
           Value: true
+        drivewhl_l_link:
+          Value: true
+        drivewhl_r_link:
+          Value: true
         imu_link:
           Value: true
         lidar_link:
+          Value: true
+        map:
+          Value: true
+        monitor_link:
+          Value: true
+        odom:
           Value: true
       Marker Scale: 0.30000001192092896
       Name: TF
@@ -153,10 +168,20 @@ Visualization Manager:
             {}
           casterwhl_rr_link:
             {}
+          drivewhl_l_link:
+            {}
+          drivewhl_r_link:
+            {}
           imu_link:
             {}
           lidar_link:
             {}
+          monitor_link:
+            {}
+        map:
+          {}
+        odom:
+          {}
       Update Interval: 0
       Value: true
     - Alpha: 1

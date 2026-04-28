@@ -9,9 +9,12 @@ const connecting = ref(false)
 const mapCanvas = ref(null)
 const mapInfo = ref('En attente de la carte...')
 const battery = ref(100) // Batterie a 100% au départ
-const mapRotation = ref(0) // Rotation de la carte en degrés
 const maxLinearSpeed = ref(0.5)  // Vitesse d'avance (m/s)
 const maxAngularSpeed = ref(0.5) // Vitesse de rotation (rad/s)
+const isEStopActive = ref(false) // État du bouton d'arrêt d'urgence
+const logs = ref([]) // tableau vide au départ
+const showLidar = ref(true) // Controle de l'affichage du LiDAR
+const mapZoom = ref(1) // 1 = 100%, 0.5 = 50% (dézoom), 2 = 200% (zoom)
 let mapCtx = null
 let ros = null // L'objet qui gérera la connexion
 let cmdVelTopic = null
@@ -32,9 +35,24 @@ const odom = ref({
 
 //Décharge simulée de la batterie
 setInterval(() => {
-  // Si on est connecté et aue le robot bouge (vitesse non nulle)
+  // Si on est connecté et que le robot bouge (vitesse non nulle)
   if(connected.value && (parseFloat(odom.value.linear_speed) !==0 || parseFloat(odom.value.angular_speed) !== 0)){
     battery.value = Math.max(0, battery.value - 0.1)// On perd 0.1% chaque seconde
+  } 
+  // 2. LE BOUCLIER DE SÉCURITÉ
+  // Si la batterie est critique (< 20%) OU que l'arrêt d'urgence est actif
+  if (battery.value < 20 || isEStopActive.value) {
+    stopVel() // On force l'arrêt immédiat du robot
+  }
+
+  // Alerte visuelle si la batterie est très faible (< 20%)
+  if (battery.value < 20) {
+    addLog(`Batterie critique : ${battery.value.toFixed(1)}%`, 'error')
+  }
+
+  // Alerte si la batterie est vide
+  if (battery.value === 0 && connected.value) {
+    addLog("Batterie vide ! Le robot s'est arrêté.", 'error')
   }
 }, 1000)
 
@@ -75,7 +93,7 @@ async function connectRos() {
     ros.on('connection', () => {
       connected.value = true
       connecting.value = false
-      console.log('Connecté à ROSBridge !')
+      addLog('Connecté à ROSBridge !', 'success')
     })
 
     // ---- PUBLISHER /cmd_vel ----
@@ -150,23 +168,60 @@ async function connectRos() {
     // Événement : Erreur
     ros.on('error', (error) => {
       connecting.value = false
-      console.error('Erreur de connexion:', error)
+      addLog("Erreur de connexion ROS", "error")
     })
 
     // Événement : Déconnexion
     ros.on('close', () => {
       connected.value = false
       connecting.value = false
-      console.warn('Déconnecté de ROSBridge')
+      addLog("Déconnecté de ROSBridge", "error")
     })
   } catch (err) {
-    console.error("Erreur d'import ou de connexion :", err)
+    addLog("Erreur d'import ou de connexion", "error")
     connecting.value = false
+  }
+}
+
+function addLog(message, type = 'info'){
+  const noz = new Date()
+  const timeString = noz.toLocaleTimeString() // Ex: 14:30:05
+  //Om ajoute le nouveau message au début de la liste
+  logs.value.unshift({
+    time: timeString,
+    message: message,
+    type: type
+  })
+
+  // On limite le nombre de logs à 20
+  if(logs.value.length > 20) {
+    logs.value.pop()
+  }
+}
+
+function getLogColor(type){
+  switch (type){
+    case 'error': return 'var(--accent-red)' // Rouge pour les pannes/urgences
+    case 'warning': return 'var(--accent-yellow)' // Jaune pour les alertes (batterie)
+    case "success": return 'var(--accent-green)' // vert pour les succés
+    default : return 'var(--text-secondary)' // Couleur par défaut
+  }
+}
+
+function toggleEStop(){
+  isEStopActive.value = !isEStopActive.value //On inverse l'état du bouton
+  if(isEStopActive.value){
+    stopVel() //On force l'arret immédiat du robo
+    addLog("Arret d'urgence activé !", "error")  
   }
 }
 
 // ---- CONTRÔLE MANUEL ----
 function startVel(linear, angular) {
+  // 1. LE BOUCLIER : Si Urgence, on bloque instantanément, on ne fait rien d'autre !
+  if (isEStopActive.value) return
+  
+  
   if (!cmdVelTopic || !connected.value) return
   if (velInterval) clearInterval(velInterval)
   
@@ -189,6 +244,30 @@ function stopVel() {
     angular: { x: 0.0, y: 0.0, z: 0.0 }
   }
   cmdVelTopic.publish(twist)
+}
+
+function resetSimulation(){
+  if(!ros || !connected.value) return
+
+  // On prépare le client pour appeler le service Gazebo
+  const resetClient = new ROSLIB.Service({
+    ros: ros,
+    name: '/reset_simulation',
+    serviceType: 'std_srvs/srv/Empty'  
+  })
+
+  // La reauete est vide car on ne lui donne pas de paraėtres spéciaux
+  const request = new ROSLIB.ServiceRequest({})
+
+  resetClient.callService(
+    request, 
+    (result) => {
+      addLog('Simulation réinitialisée !', 'success')
+    },
+    (error) => {
+      addLog('Échec du reset : ' + error, 'error')
+    }
+  )
 }
 
 // Fonction appelée quand on clique sur "Disconnect"
@@ -267,18 +346,33 @@ function renderCanvas(){
   //Couche 1 : On colle le fond (la carte)
   mapCtx.putImageData(mapImageData, 0, 0)
 
-  //Couche 2 : On dessine le robot pqr dessus (Point Bleu)
+  //Couche 2 : On dessine le robot par dessus (Point Bleu)
   const rx = parseFloat(odom.value.x)
   const ry = parseFloat(odom.value.y)
+  const yawRobot = parseFloat(odom.value.yaw)
   const {px, py} = worldToCanvas(rx, ry)
 
+  // 1. Le corps du robot (Cercle Bleu)
   mapCtx.beginPath()
   mapCtx.arc(px, py, 4, 0, 2*Math.PI)
   mapCtx.fillStyle = '#3b82f6' // Bleu
   mapCtx.fill()
 
+  // 2. La flèche de direction (Ligne Rouge)
+  // On calcule un point virtuel situé 50 cm (0.5m) devant le robot
+  const frontX = rx + (Math.cos(yawRobot) * 0.5) 
+  const frontY = ry + (Math.sin(yawRobot) * 0.5)
+  const {px: fpx, py: fpy} = worldToCanvas(frontX, frontY)
+  
+  mapCtx.beginPath()
+  mapCtx.moveTo(px, py)
+  mapCtx.lineTo(fpx, fpy)
+  mapCtx.strokeStyle = '#000000' // Noir pour contraster avec le fond gris clair de la carte
+  mapCtx.lineWidth = 3 // Trait plus épais
+  mapCtx.stroke()
+
     // Couche 1.5 : Le nuage de points du LiDAR
-  if (currentScan) {
+  if (currentScan && showLidar.value) {
     const yaw = parseFloat(odom.value.yaw)
     const rx = parseFloat(odom.value.x)
     const ry = parseFloat(odom.value.y)
@@ -403,10 +497,12 @@ function drawLidar(msg) {
               <span style="color:var(--text-muted)">LIDAR (/scan)</span>
               <span :style="{ color: sensors.lidar === 'ACTIVE' ? 'var(--accent-green)' : 'var(--accent-red)'}">{{sensors.lidar}}</span>
             </div>
+
             <div style="display:flex; justify-content:space-between;">
               <span style="color:var(--text-muted)">Camera (/depth_camera)</span>
               <span :style="{ color: sensors.camera === 'ACTIVE' ? 'var(--accent-green)' : 'var(--accent-red)'}">{{sensors.camera}}</span>
             </div>
+            
             <div style="display:flex; justify-content:space-between;">
               <span style="color:var(--text-muted)">SLAM (/map)</span>
               <span :style="{ color: sensors.map === 'ACTIVE' ? 'var(--accent-green)' : 'var(--accent-red)'}">{{ sensors.map }}</span>
@@ -423,13 +519,27 @@ function drawLidar(msg) {
             <div style="font-size:10px; color:var(--text-muted); margin-bottom:8px">
               {{ mapInfo }}
             </div>
-            <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text-muted)">
-              <span>Rotation: {{  mapRotation }}°</span>
-              <input type="range" min="-180°" max="180°" v-model="mapRotation" style="width:100px;">
+            <div style="display:flex; align-items:center; gap:16px; font-size:11px; color:var(--text-muted); margin-bottom:8px;">
+              <!-- Curseur de Zoom -->
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span>Zoom: {{ Math.round(mapZoom * 100) }}%</span>
+                <input type="range" min="0.2" max="3" step="0.1" v-model="mapZoom" style="width:100px;">              
+              </div>
+              
+              <!-- Case à cocher LiDAR -->
+              <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                <input type="checkbox" v-model="showLidar">
+                Afficher LiDAR
+              </label>
             </div>
-            <!-- C'est ici qu'on va dessiner la carte -->
-            <canvas ref="mapCanvas" style="flex:1; width:100%; border-radius:8px; background:var(--bg-secondary);" 
-            :style="{transform: 'rotate(' + mapRotation + 'deg)'}"></canvas>
+
+            <!-- C'est ici qu'on va dessiner la carte avec le zoom et le blocage des débordements -->
+            <div style="flex:1; width:100%; border-radius:8px; background:var(--bg-secondary); overflow:hidden; display:flex; justify-content:center; align-items:center;">
+              <canvas 
+                ref="mapCanvas" 
+                :style="{ transform: 'scale(' + mapZoom + ')' }"
+              ></canvas>
+            </div>
             
             <div style="display:flex; gap:16px; margin-top:12px; font-size:11px; color:var(--text-muted); justify-content:center">
               <span>🔵 Robot</span>
@@ -445,6 +555,20 @@ function drawLidar(msg) {
         
         <!-- Contrôle Manuel -->
         <div class="card">
+          <button 
+            @click="toggleEStop" 
+            class="btn" 
+            :style="{ 
+              width: '100%', 
+              marginBottom: '15px', 
+              padding: '12px', 
+              fontWeight: 'bold',
+              background: isEStopActive ? 'var(--accent-red)' : 'rgba(239,68,68,0.15)',
+              color: isEStopActive ? '#fff' : 'var(--accent-red)',
+              border: '2px solid var(--accent-red)'
+            }">
+            {{ isEStopActive ? "⚠️ ARRÊT D\'URGENCE VERROUILLÉ" : "🛑 ARRÊT D\'URGENCE" }}
+          </button>
           <h2>Contrôle Manuel</h2>
           <div class="ctrl-grid">
             <div></div>
@@ -478,7 +602,15 @@ function drawLidar(msg) {
 
         <div class="card">
             <h2>Logs</h2>
-            <!-- On mettra les événements ici -->
+            <div style="display:flex; flex-direction:column; gap:8px; max-height:200px;
+            overflow-y:auto; padding-right:12px;">
+              <div v-for="(log, index) in logs"
+              :key="index"
+              :style="{color: getLogColor(log.type)}">
+              <span style="color:var(--text-muted)">[{{ log.time }}]</span>
+              {{ log.message }}
+              </div>
+            </div>
         </div>
       </div>
     </main>
