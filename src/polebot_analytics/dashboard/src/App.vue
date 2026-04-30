@@ -1,6 +1,18 @@
 <script setup>
-import { ref, computed} from 'vue'
+import { ref, computed } from 'vue'
 import * as ROSLIB from 'roslib'
+import { InfluxDB, Point } from '@influxdata/influxdb-client'
+import Chart from 'chart.js/auto'
+
+// --- CONFIGURATION INFLUXDB ---
+const influxURL = 'http://localhost:8086'
+const influxToken = 'O6KdiXqBpyFcH1PlGx2GkVWjaUz6ptHEdA7nAwZsGA-DtC_un7iuWinrxczOF79ss1cb5ItgvqLjjRyaKDNXLQ=='
+const influxOrg = '2fb3ec77104ac02e' // Utilisation de l'ID exact de votre organisation
+const influxBucket = 'polebot_data'
+
+const influxDB = new InfluxDB({ url: influxURL, token: influxToken })
+const writeApi = influxDB.getWriteApi(influxOrg, influxBucket, 'ms') // ms = Précision à la milliseconde
+
 
 // Nos variables réactives (si elles changent, l'interface se met à jour)
 const wsUrl = ref('ws://localhost:9090')
@@ -15,6 +27,11 @@ const isEStopActive = ref(false) // État du bouton d'arrêt d'urgence
 const logs = ref([]) // tableau vide au départ
 const showLidar = ref(true) // Controle de l'affichage du LiDAR
 const mapZoom = ref(1) // 1 = 100%, 0.5 = 50% (dézoom), 2 = 200% (zoom)
+const activeTab = ref('control') // Variable pour savoir quel onglet est ouvert
+const showBatteryLine = ref(true)
+const showLinearSpeedLine = ref(true)
+const showAngularSpeedLine = ref(true)
+let analyticsChart = null // Gardera le graphique en mémoire
 let mapCtx = null
 let ros = null // L'objet qui gérera la connexion
 let cmdVelTopic = null
@@ -33,28 +50,35 @@ const odom = ref({
   angular_speed: '0.00'
 })
 
-//Décharge simulée de la batterie
+// Boucle Principale : Batterie et Data Historian (1x par seconde)
 setInterval(() => {
-  // Si on est connecté et que le robot bouge (vitesse non nulle)
-  if(connected.value && (parseFloat(odom.value.linear_speed) !==0 || parseFloat(odom.value.angular_speed) !== 0)){
-    battery.value = Math.max(0, battery.value - 0.1)// On perd 0.1% chaque seconde
-  } 
-  // 2. LE BOUCLIER DE SÉCURITÉ
-  // Si la batterie est critique (< 20%) OU que l'arrêt d'urgence est actif
-  if (battery.value < 20 || isEStopActive.value) {
-    stopVel() // On force l'arrêt immédiat du robot
+  if (!connected.value) return
+
+  // 1. DÉCHARGE SIMULÉE DE LA BATTERIE
+  if (parseFloat(odom.value.linear_speed) !== 0 || parseFloat(odom.value.angular_speed) !== 0) {
+    battery.value = Math.max(0, battery.value - 0.1)
   }
 
-  // Alerte visuelle si la batterie est très faible (< 20%)
-  if (battery.value < 20) {
-    addLog(`Batterie critique : ${battery.value.toFixed(1)}%`, 'error')
-  }
+  // 2. BOUCLIER DE SÉCURITÉ
+  if (battery.value < 20 || isEStopActive.value) stopVel()
+  if (battery.value < 20) addLog(`Batterie critique : ${battery.value.toFixed(1)}%`, 'error')
+  if (battery.value === 0) addLog("Batterie vide ! Le robot s'est arrêté.", 'error')
 
-  // Alerte si la batterie est vide
-  if (battery.value === 0 && connected.value) {
-    addLog("Batterie vide ! Le robot s'est arrêté.", 'error')
+  // 3. ENVOI DES DONNÉES À INFLUXDB (Data Historian)
+  try {
+    const point = new Point('telemetry') // Le nom de la "table"
+      .tag('robot_id', 'polebot_01')     // Étiquette pour identifier ce robot spécifique
+      .floatField('battery_level', battery.value)
+      .floatField('linear_speed', parseFloat(odom.value.linear_speed))
+      .floatField('angular_speed', parseFloat(odom.value.angular_speed))
+    
+    writeApi.writePoint(point) // On met le point dans la boîte aux lettres
+    writeApi.flush()           // On force l'envoi immédiat !
+  } catch (err) {
+    console.error("Erreur d'écriture InfluxDB :", err)
   }
 }, 1000)
+
 
 //État de santé des capteurs
 const sensors = ref({ 
@@ -73,10 +97,10 @@ const robotState = computed(() => {
 // On crée une fonction pour obtenir le style CSS en fonction de l'état
 const getStateColor = (state) => {
   switch (state) {
-    case 'MOVING': return 'from-green-400 to-emerald-600' // Vert
-    case 'IDLE': return 'from-yellow-400 to-orange-600' // Orange
-    case 'OFFLINE': return 'from-red-400 to-rose-600' // Rouge
-    default: return 'from-slate-400 to-slate-600'
+    case 'MOVING': return 'badge-green' // Vert
+    case 'IDLE': return 'badge-yellow' // Orange
+    case 'OFFLINE': return 'badge-red' // Rouge
+    default: return ''
   }
 }
 
@@ -407,6 +431,128 @@ function drawLidar(msg) {
   //Le LIDAR se met ȧ jour 10 fois par seconde, on force le dessin
   if (mapData) renderCanvas()
 }
+
+// ---- FONCTION ANALYTICS (INFLUXDB -> CHART.JS) ----
+function fetchAndDrawChart() {
+  const queryApi = influxDB.getQueryApi(influxOrg)
+  // Requête Flux : On prend la télémétrie des 5 dernières minutes
+  const query = `
+    from(bucket: "${influxBucket}")
+      |> range(start: -5m)
+      |> filter(fn: (r) => r._measurement == "telemetry")
+      |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+  `
+  
+  const labels = []
+  const batteryData = []
+  const linearSpeedData = []
+  const angularSpeedData = []
+
+  queryApi.queryRows(query, {
+    next(row, tableMeta) {
+      const o = tableMeta.toObject(row)
+      const time = new Date(o._time).toLocaleTimeString() // Heure lisible
+      
+      labels.push(time)
+      batteryData.push(o.battery_level || 0)
+      linearSpeedData.push(o.linear_speed || 0)
+      angularSpeedData.push(o.angular_speed || 0)
+    },
+    error(error) { 
+      console.error("Erreur de requête InfluxDB:", error) 
+    },
+    complete() {
+      console.log(`Données InfluxDB reçues : ${labels.length} points temporels.`)
+      
+      const ctx = document.getElementById('analyticsChart')
+      if (!ctx) {
+        console.error("Impossible de trouver le Canvas #analyticsChart dans le HTML !")
+        return
+      }
+      
+      console.log("Création du graphique Chart.js...")
+      if (analyticsChart) analyticsChart.destroy()
+      
+      // Plugin pour forcer un fond blanc (utile pour l'export PNG)
+      const whiteBackgroundPlugin = {
+        id: 'customCanvasBackgroundColor',
+        beforeDraw: (chart) => {
+          const ctx = chart.canvas.getContext('2d');
+          ctx.save();
+          ctx.globalCompositeOperation = 'destination-over';
+          ctx.fillStyle = 'white';
+          ctx.fillRect(0, 0, chart.width, chart.height);
+          ctx.restore();
+        }
+      };
+
+      analyticsChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            { label: 'Batterie (%)', data: batteryData, borderColor: '#3b82f6', yAxisID: 'y' },
+            { label: 'V. Linéaire (m/s)', data: linearSpeedData, borderColor: '#ef4444', yAxisID: 'y1' },
+            { label: 'V. Angulaire (rad/s)', data: angularSpeedData, borderColor: '#eab308', yAxisID: 'y2' }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          scales: {
+            y: { type: 'linear', position: 'left', min: 0, max: 100 },
+            y1: { type: 'linear', position: 'right', min: 0, max: 1.5 },
+            y2: { type: 'linear', position: 'right', min: -2, max: 2 }
+          }
+        },
+        plugins: [whiteBackgroundPlugin]
+      })
+    }
+  })
+}
+
+function openAnalytics() {
+  activeTab.value = 'analytics'
+  setTimeout(() => {
+    fetchAndDrawChart()
+  }, 200)
+}
+
+function updateChartVisibility() {
+  if (!analyticsChart) return
+  analyticsChart.setDatasetVisibility(0, showBatteryLine.value)
+  analyticsChart.setDatasetVisibility(1, showLinearSpeedLine.value)
+  analyticsChart.setDatasetVisibility(2, showAngularSpeedLine.value)
+  
+  // Afficher ou Cacher chaque échelle individuellement
+  analyticsChart.options.scales.y.display = showBatteryLine.value
+  analyticsChart.options.scales.y1.display = showLinearSpeedLine.value
+  analyticsChart.options.scales.y2.display = showAngularSpeedLine.value
+  
+  // Logique de rapatriement à gauche si la batterie est décochée
+  if (!showBatteryLine.value) {
+    if (showLinearSpeedLine.value) {
+      analyticsChart.options.scales.y1.position = 'left'
+      analyticsChart.options.scales.y2.position = 'right'
+    } else {
+      analyticsChart.options.scales.y2.position = 'left'
+    }
+  } else {
+    analyticsChart.options.scales.y1.position = 'right'
+    analyticsChart.options.scales.y2.position = 'right'
+  }
+
+  analyticsChart.update()
+}
+
+function downloadChart() {
+  const canvas = document.getElementById('analyticsChart')
+  if (!canvas) return
+  // Création d'un lien invisible pour forcer le téléchargement de l'image
+  const link = document.createElement('a')
+  link.download = 'Historique_Polebot.png'
+  link.href = canvas.toDataURL('image/png')
+  link.click()
+}
 </script>
 
 <template>
@@ -448,8 +594,48 @@ function drawLidar(msg) {
       </div>
     </header>
 
-    <!-- GRID PRINCIPALE : Contient les 3 colonnes de notre dashboard -->
-    <main class="main-grid">
+    <!-- 1. LE MENU DES ONGLETS -->
+    <div style="display:flex; gap:10px; padding: 10px 20px; background:var(--bg-secondary); border-bottom:1px solid var(--border-color);">
+      <button class="btn" :style="activeTab === 'control' ? 'background:var(--accent-blue); color:white' : ''" @click="activeTab = 'control'">
+        🎮 Live Control
+      </button>
+      <button class="btn" :style="activeTab === 'analytics' ? 'background:var(--accent-blue); color:white' : ''" @click="openAnalytics">
+        📈 Historique Analytics
+      </button>
+    </div>
+
+    <!-- 2. ONGLET ANALYTICS -->
+    <div v-if="activeTab === 'analytics'" style="padding: 20px; flex: 1; display: flex; flex-direction: column;">
+      <div class="card" style="flex: 1; min-height: 400px; display: flex; flex-direction: column;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
+          <h2>Historique InfluxDB (5 dernières minutes)</h2>
+          
+          <!-- Filtres et Téléchargement -->
+          <div style="display:flex; gap:15px; align-items:center;">
+            <label style="font-size:12px; cursor:pointer; color:var(--text-primary);">
+              <input type="checkbox" v-model="showBatteryLine" @change="updateChartVisibility"> 🔋 Batterie
+            </label>
+            <label style="font-size:12px; cursor:pointer; color:var(--text-primary);">
+              <input type="checkbox" v-model="showLinearSpeedLine" @change="updateChartVisibility"> ⬆️ V. Linéaire
+            </label>
+            <label style="font-size:12px; cursor:pointer; color:var(--text-primary);">
+              <input type="checkbox" v-model="showAngularSpeedLine" @change="updateChartVisibility"> 🔄 V. Angulaire
+            </label>
+            <button class="btn btn-primary" @click="downloadChart" style="padding: 5px 10px; font-size:11px;">
+              💾 Télécharger (PNG)
+            </button>
+          </div>
+        </div>
+        
+        <div style="flex: 1; position: relative;">
+          <!-- C'est ici que Chart.js va dessiner les courbes -->
+          <canvas id="analyticsChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. ONGLET CONTROL : GRID PRINCIPALE (Contient les 3 colonnes de notre dashboard) -->
+    <main class="main-grid" v-show="activeTab === 'control'">
       <!-- Colonne GAUCHE (Données en direct) -->
       <div class="col">
         <div class="card">
@@ -489,7 +675,7 @@ function drawLidar(msg) {
           <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; 
           border-bottom:1px solid var(--border-color); padding-bottom:10px;">
             <span style="font-size:12px; color:var(--text-muted)">ROBOT STATE</span>
-            <span :class="['badge', robotState === 'MOVING' ? 'badge-green' : (robotState === 'IDLE' ? '' : 'badge-red')]">{{ robotState }}</span>
+            <span :class="['badge', getStateColor(robotState)]">{{ robotState }}</span>
           </div>
 
           <div style="display:flex; flex-direction: column; gap:8px; font-size:12px;">
@@ -670,6 +856,7 @@ h2 { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:up
 /* Badges de statut */
 .badge { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:20px; font-size:12px; font-weight:500; }
 .badge-green { background:rgba(16,185,129,0.15); color:var(--accent-green); border:1px solid rgba(16,185,129,0.3); }
+.badge-yellow { background:rgba(245,158,11,0.15); color:var(--accent-yellow); border:1px solid rgba(245,158,11,0.3); }
 .badge-red { background:rgba(239,68,68,0.15); color:var(--accent-red); border:1px solid rgba(239,68,68,0.3); }
 .pulse { animation:pulse 2s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
