@@ -24,6 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'mock_diagnostics = polebot_analytics.mock_diagnostics:main',
+            'pose_publisher = polebot_analytics.pose_publisher:main'
         ],
     },
 )

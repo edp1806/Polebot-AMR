@@ -36,10 +36,47 @@ let mapCtx = null
 let ros = null // L'objet qui gérera la connexion
 let cmdVelTopic = null
 let velInterval = null
-let camCtx = null
+let connectTimeout = null // Ajouté pour éviter l'erreur dans disconnectRos
 let mapData = null
 let mapImageData = null
 let currentScan = null
+
+// ---- SOLUTION D'EXPERT : Web Worker pour la Carte ----
+// Création d'un Worker dynamique pour calculer l'image de la carte en arrière-plan (sans bloquer l'UI)
+const mapWorkerCode = `
+self.onmessage = function(e) {
+  const { data, width, height } = e.data;
+  const pixelData = new Uint8ClampedArray(width * height * 4);
+  
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = (y * width) + x;
+      const value = data[index];
+      const pixelIndex = ((height - 1 - y) * width + x) * 4;
+      
+      if (value === -1) { // Inconnu (Gris foncé)
+        pixelData[pixelIndex] = 15; pixelData[pixelIndex+1] = 22; pixelData[pixelIndex+2] = 41; pixelData[pixelIndex+3] = 255;
+      } else if (value === 0) { // Vide (Gris très clair)
+        pixelData[pixelIndex] = 220; pixelData[pixelIndex+1] = 220; pixelData[pixelIndex+2] = 225; pixelData[pixelIndex+3] = 255;
+      } else { // Mur / Obstacle (Rouge vif)
+        pixelData[pixelIndex] = 239; pixelData[pixelIndex+1] = 68; pixelData[pixelIndex+2] = 68; pixelData[pixelIndex+3] = 255;
+      }
+    }
+  }
+  
+  // On renvoie le tableau calculé au fil principal
+  self.postMessage({ pixelData, width, height }, [pixelData.buffer]);
+}
+`;
+const mapWorkerBlob = new Blob([mapWorkerCode], { type: 'application/javascript' });
+const mapWorker = new Worker(URL.createObjectURL(mapWorkerBlob));
+
+mapWorker.onmessage = function(e) {
+  const { pixelData, width, height } = e.data;
+  mapImageData = new ImageData(pixelData, width, height);
+  // Dès que le Worker a fini, on rafraîchit le canevas
+  if (typeof renderCanvas === 'function') renderCanvas();
+};
 
 // Variable réactive pour la position du robot
 const odom = ref({
@@ -50,7 +87,8 @@ const odom = ref({
   angular_speed: '0.00'
 })
 
-// Boucle Principale : Batterie et Data Historian (1x par seconde)
+// ----- Batterie et Data Historian -----
+
 setInterval(() => {
   if (!connected.value) return
 
@@ -60,6 +98,10 @@ setInterval(() => {
   }
 
   // 2. BOUCLIER DE SÉCURITÉ
+  // ⚠️ AVIS ARCHITECTURE ROS2 :
+  // Gérer la sécurité depuis le Dashboard web est dangereux (risque de perte de Wi-Fi ou plantage navigateur).
+  // Dans un vrai système, cette logique de "bouclier" (blocage cmd_vel) doit être implémentée 
+  // dans un nœud ROS2 embarqué (C++ ou Python) directement sur le robot.
   if (battery.value < 20 || isEStopActive.value) stopVel()
   if (battery.value < 20) addLog(`Batterie critique : ${battery.value.toFixed(1)}%`, 'error')
   if (battery.value === 0) addLog("Batterie vide ! Le robot s'est arrêté.", 'error')
@@ -73,13 +115,20 @@ setInterval(() => {
       .floatField('angular_speed', parseFloat(odom.value.angular_speed))
     
     writeApi.writePoint(point) // On met le point dans la boîte aux lettres
-    writeApi.flush()           // On force l'envoi immédiat !
+    // Optimisation : On ne force plus le flush() à chaque seconde.
+    // On laisse le client InfluxDB grouper (batch) les envois en arrière-plan pour de meilleures performances.
   } catch (err) {
     console.error("Erreur d'écriture InfluxDB :", err)
   }
 }, 1000)
 
 
+// ----- Gestion des États et de l'UI -----
+
+// ⚠️ AVIS ARCHITECTURE ROS2 :
+// Détecter l'état via la réception de données brutes est imprécis.
+// La bonne pratique (Standard ROS2) est d'utiliser `diagnostic_msgs` sur le topic `/diagnostics`
+// où le robot publie un "Heartbeat" officiel de l'état de chaque composant (OK, WARN, ERROR).
 //État de santé des capteurs
 const sensors = ref({ 
   lidar: 'WAITING',
@@ -87,6 +136,11 @@ const sensors = ref({
   map: 'WAITING'
 })
 
+// ⚠️ AVIS ARCHITECTURE ROS2 :
+// Déduire l'état uniquement à partir de la vitesse (odom) est une approche limitée.
+// Si le robot est bloqué physiquement mais que les moteurs tournent, le dashboard affichera "MOVING".
+// L'approche industrielle : utiliser les Managed Nodes (Lifecycle) ou écouter le serveur
+// d'action de navigation (ex: Nav2) pour connaître le véritable état logique du robot.
 // L'état du robot se calcule tout seul en fonction de la vitesse !
 const robotState = computed(() => {
   if(!connected.value) return 'OFFLINE'
@@ -104,7 +158,8 @@ const getStateColor = (state) => {
   }
 }
 
-// Fonction appelée quand on clique sur "Connect"
+// ----- Fonction Centrale de Connexion ROS (connectRos) -----
+
 async function connectRos() {
   if (connecting.value || connected.value) return
   connecting.value = true
@@ -135,23 +190,34 @@ async function connectRos() {
     })
 
     odomListener.subscribe((message) => {
-      // Extraction de la position X et Y
-      odom.value.x = message.pose.pose.position.x.toFixed(2)
-      odom.value.y = message.pose.pose.position.y.toFixed(2)
-
-      // Extraction des vitesses
+      // On n'extrait plus que les vitesses depuis /odom (l'odométrie pure dérive)
       odom.value.linear_speed = message.twist.twist.linear.x.toFixed(2)
       odom.value.angular_speed = message.twist.twist.angular.z.toFixed(2)
+    })
+    // ----------------------------
 
-      // Extraction de l'angle Yaw à partir du Quaternion
-      const q = message.pose.pose.orientation
+    // ---- ABONNEMENT À /robot_pose (Position exacte sur la Carte SLAM) ----
+    const poseListener = new ROSLIB.Topic({
+      ros: ros,
+      name: '/robot_pose',
+      messageType: 'geometry_msgs/msg/PoseStamped'
+    })
+
+    poseListener.subscribe((message) => {
+      // Extraction de la position X et Y sur la map
+      odom.value.x = message.pose.position.x.toFixed(2)
+      odom.value.y = message.pose.position.y.toFixed(2)
+
+      // Extraction de l'angle Yaw
+      const q = message.pose.orientation
       const siny_cosp = 2 * (q.w * q.z + q.x * q.y)
       const cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
       odom.value.yaw = Math.atan2(siny_cosp, cosy_cosp).toFixed(2)
       
-      renderCanvas()
+      renderCanvas() // On met à jour la carte uniquement quand la vraie position change
     })
     // ----------------------------
+
     // ---- ABONNEMENT À /map ----
     const mapListener = new ROSLIB.Topic({
       ros: ros,
@@ -162,19 +228,6 @@ async function connectRos() {
     mapListener.subscribe((message) => {
       mapInfo.value = `Taille : ${message.info.width}x${message.info.height} (Résolution: ${message.info.resolution.toFixed(3)}m/px)`
       drawMap(message)
-      sensors.value.map = 'ACTIVE'
-    })
-    // ----------------------------
-
-    // ---- ABONNEMENT Ȧ LA CAMÉRA ----
-    const cameraListener = new ROSLIB.Topic({
-      ros: ros,
-      name: '/depth_camera/rgb/image_raw',
-      messageType: 'sensor_msgs/msg/Image'
-    })
-    cameraListener.subscribe((message) => {
-      drawCamera(message)
-      sensors.value.camera = 'ACTIVE'
     })
     // ----------------------------
 
@@ -186,7 +239,6 @@ async function connectRos() {
     })
     lidarListener.subscribe((message) => {
       drawLidar(message)
-      sensors.value.lidar = 'ACTIVE'
     })
 
     // Événement : Erreur
@@ -205,11 +257,44 @@ async function connectRos() {
     addLog("Erreur d'import ou de connexion", "error")
     connecting.value = false
   }
+
+  // ----------------------------
+
+  // ---- ABONNEMENT AU DIAGNOSTICS (Heartbeat Capteurs) ----
+  const diagListener = new ROSLIB.Topic({
+    ros: ros,
+    name: '/diagnostics',
+    messageType : 'diagnostic_msgs/msg/DiagnosticArray'
+  })
+
+  diagListener.subscribe((message) => {
+    // message.status est une liste (array) de tous les capteurs
+    message.status.forEach((status) => {
+      // Traduction du niveau d'erreur ROS2 (0=OK, 1= WARN, 2=ERROR, 3=STALE)
+      let stateStr = 'UNKNOWN'
+      if (status.level === 0) stateStr = 'OK'
+      else if (status.level === 1) stateStr = 'WARN'
+      else if (status.level === 2) stateStr = 'ERROR'
+      else if (status.level === 3) stateStr = 'STALE'
+
+      // On met à jour l'UI en identifiant le capteur par son nom
+      const name = status.name.toLowerCase()
+      if (name.includes('lidar') || name.includes('scan')) {
+        sensors.value.lidar = stateStr
+      } else if (name.includes('camera') || name.includes('depth')) {
+        sensors.value.camera = stateStr
+      } else if (name.includes('map') || name.includes('slam') || name.includes('nav')) {
+        sensors.value.map = stateStr
+      }
+    })
+  })
 }
 
+// ----- Système de Logs et Arrêt d'Urgence -----
+
 function addLog(message, type = 'info'){
-  const noz = new Date()
-  const timeString = noz.toLocaleTimeString() // Ex: 14:30:05
+  const now = new Date()
+  const timeString = now.toLocaleTimeString() // Ex: 14:30:05
   //Om ajoute le nouveau message au début de la liste
   logs.value.unshift({
     time: timeString,
@@ -232,15 +317,26 @@ function getLogColor(type){
   }
 }
 
+// ⚠️ AVIS ARCHITECTURE ROS2 (Sécurité) :
+// Un bouton Web est un "Soft E-Stop". Il ne doit JAMAIS remplacer le vrai bouton d'arrêt d'urgence physique ("Hard E-Stop") sur le robot.
+// En cas de perte Wi-Fi, ce bouton ne fonctionnera plus. Une sécurité logicielle robuste doit toujours
+// s'accompagner d'une coupure matérielle.
 function toggleEStop(){
   isEStopActive.value = !isEStopActive.value //On inverse l'état du bouton
   if(isEStopActive.value){
     stopVel() //On force l'arret immédiat du robo
     addLog("Arret d'urgence activé !", "error")  
   }
+  else {
+    addLog("Arret d'urgence désactivé !", "success")  
+  }
 }
 
-// ---- CONTRÔLE MANUEL ----
+ 
+// ----- CONTRÔLE MANUEL -----
+
+
+
 function startVel(linear, angular) {
   // 1. LE BOUCLIER : Si Urgence, on bloque instantanément, on ne fait rien d'autre !
   if (isEStopActive.value) return
@@ -259,6 +355,11 @@ function startVel(linear, angular) {
   }, 100)
 }
 
+// ⚠️ AVIS ARCHITECTURE ROS2 (Conflit de commandes) :
+// Envoyer {x:0, y:0, z:0} sur /cmd_vel est inefficace si Nav2 tourne en même temps, car Nav2 
+// écrasera cette commande à la fraction de seconde suivante. 
+// L'approche Industrielle ROS2 : utiliser `twist_mux` et publier sur un topic très prioritaire 
+// (ex: /e_stop_vel), ou désactiver directement les Lifecycle Nodes contrôlant les moteurs via un Service.
 function stopVel() {
   if (velInterval) clearInterval(velInterval)
   if (!cmdVelTopic || !connected.value) return
@@ -267,8 +368,20 @@ function stopVel() {
     linear: { x: 0.0, y: 0.0, z: 0.0 },
     angular: { x: 0.0, y: 0.0, z: 0.0 }
   }
-  cmdVelTopic.publish(twist)
+  
+  // Solution d'Expert : On publie l'arrêt plusieurs fois pour 
+  // garantir la réception malgré les éventuelles pertes Wi-Fi
+  let stopTicks = 0
+  velInterval = setInterval(() => {
+    cmdVelTopic.publish(twist)
+    stopTicks++
+    if (stopTicks >= 4) { // Envoi 4 fois (pendant 400ms)
+      clearInterval(velInterval)
+    }
+  }, 100)
 }
+
+// ----- Services ROS et Déconnexion -----
 
 function resetSimulation(){
   if(!ros || !connected.value) return
@@ -280,81 +393,91 @@ function resetSimulation(){
     serviceType: 'std_srvs/srv/Empty'  
   })
 
-  // La reauete est vide car on ne lui donne pas de paraėtres spéciaux
+  // La requête est vide car on ne lui donne pas de paramètres spéciaux
   const request = new ROSLIB.ServiceRequest({})
+
+  // Solution d'Expert : On ajoute un timeout pour éviter que le navigateur n'attende indéfiniment
+  let isResponded = false
+  const timeoutTimer = setTimeout(() => {
+    if (!isResponded) {
+      isResponded = true
+      addLog('Échec : Le simulateur ne répond pas (Timeout)', 'error')
+    }
+  }, 3000)
 
   resetClient.callService(
     request, 
     (result) => {
-      addLog('Simulation réinitialisée !', 'success')
+      if (!isResponded) {
+        isResponded = true
+        clearTimeout(timeoutTimer)
+        addLog('Simulation réinitialisée !', 'success')
+      }
     },
     (error) => {
-      addLog('Échec du reset : ' + error, 'error')
+      if (!isResponded) {
+        isResponded = true
+        clearTimeout(timeoutTimer)
+        addLog('Échec du reset : ' + error, 'error')
+      }
     }
   )
 }
 
 // Fonction appelée quand on clique sur "Disconnect"
 function disconnectRos() {
-  if (ros) {
-    ros.close()
+  // 1. Couper la connexion réseau avec le robot
+  if (ros) ros.close()
+
+  // 2. Arrêter le spam des commandes moteurs
+  if (velInterval) clearInterval(velInterval)
+
+  // 3. Arrêter les tentatives de connexion en cours
+  if (connectTimeout) clearTimeout(connectTimeout)
+
+  // 4. Désactiver les alarmes (Watchdogs) des capteurs
+  // On parcourt tous les chronos actifs pour les annuler
+  if (typeof sensorWatchdogs !== 'undefined') {
+    Object.values(sensorWatchdogs).forEach(timer => clearTimeout(timer))
   }
+
+  // 5. Mettre à jour l'interface web immédiatement
+  connected.value = false
+  connecting.value = false
+  
+  // 6. Optionnel : un petit log de confirmation
+  addLog("Déconnexion manuelle effectuée.", "info")
 }
-// ---- DESSINER LA CARTE ----
+
+// ----- Peindre la Carte du Robot (OccupancyGrid) -----
+
+// ⚠️ AVIS ARCHITECTURE ROS2 (Performance UI) :
+// Cette double boucle (X/Y) bloque le fil principal (Main Thread) de JavaScript.
+// Sur des cartes industrielles gigantesques (ex: 4000x4000 pixels = 16M d'itérations), cela va
+// complètement "geler" l'interface web pendant plusieurs secondes à chaque rafraîchissement.
+// Solutions industrielles : 
+// 1. Déplacer ce calcul CPU lourd dans un "Web Worker" (en tâche de fond).
+// 2. Ou utiliser le GPU avec WebGL (Shaders) pour un rendu instantané.
+// Fonction qui transmet la carte au Web Worker pour un dessin en arrière-plan
 function drawMap(msg) {
   if (!mapCanvas.value) return
   if (!mapCtx) mapCtx = mapCanvas.value.getContext('2d')
   
-  const width = mapCanvas.value.width = msg.info.width
-  const height = mapCanvas.value.height = msg.info.height
-  const imgData = mapCtx.createImageData(width, height)
-
-  // ROS envoie la carte sous forme de tableau (0 = vide, 100 = mur, -1 = inconnu)
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      // Calcul de l'index dans le tableau 1D
-      const index = (y * width) + x
-      const value = msg.data[index]
-      
-      // On dessine de bas en haut (ROS = origine en bas à gauche, HTML = origine en haut à gauche)
-      const pixelIndex = ((height - 1 - y) * width + x) * 4
-
-      if (value === -1) { // Inconnu (Gris foncé)
-        imgData.data[pixelIndex] = 15; imgData.data[pixelIndex+1] = 22; imgData.data[pixelIndex+2] = 41;
-      } else if (value === 0) { // Vide (Gris très clair)
-        imgData.data[pixelIndex] = 220; imgData.data[pixelIndex+1] = 220; imgData.data[pixelIndex+2] = 225;
-      } else { // Mur / Obstacle (Rouge vif pour bien le voir)
-        imgData.data[pixelIndex] = 239; imgData.data[pixelIndex+1] = 68; imgData.data[pixelIndex+2] = 68;
-      }
-      imgData.data[pixelIndex+3] = 255 // Opacité (100%)
-    }
-  }
-  
-  // On ne dessine pas tout de suite, on la garde en mémoire !
-  mapImageData = imgData
+  // On sauvegarde les métadonnées tout de suite pour le Lidar
+  mapCanvas.value.width = msg.info.width
+  mapCanvas.value.height = msg.info.height
   mapData = msg
-  renderCanvas() // On appelle le chef d'orchestre
-}
-// ---- DESSINER LA CAMÉRA ----
-function drawCamera(msg) {
-  const canvas = document.getElementById('cameraCanvas')
-  if(!canvas) return
-  if(!camCtx) camCtx = canvas.getContext('2d')
 
-  //ROS envoie les pixels (Rouge, vert, Bleu) bruts en format Base64.
-  // Il faut le décoder en binaire, puis l'afficher pixel par pixel.
-  const binaryString = window.atob(msg.data)
-  const imgData = camCtx.createImageData(msg.width, msg.height)
-
-  for (let i=0; i<binaryString.length; i += 3){
-    const pixelIndex = (i/3)*4
-    imgData.data[pixelIndex] = binaryString.charCodeAt(i) //Rouge
-    imgData.data[pixelIndex+1] = binaryString.charCodeAt(i+1) //Green
-    imgData.data[pixelIndex+2] = binaryString.charCodeAt(i+2) //Blue
-    imgData.data[pixelIndex+3] = 255 //Opacité (100%)
-    }
-  camCtx.putImageData(imgData, 0, 0)
+  // Envoi asynchrone au Worker (le Main Thread n'est plus bloqué !)
+  mapWorker.postMessage({
+    data: msg.data,
+    width: msg.info.width,
+    height: msg.info.height
+  })
 }
+
+// ---- Coordonnées Spatiales ----
+
 //Convertit des mėtres (Monde ROS) en pixels (Canvas HTML)
 function worldToCanvas(wx,wy){
   if(!mapData) return {px: 0, py: 0}
@@ -362,6 +485,8 @@ function worldToCanvas(wx,wy){
   const py = mapData.info.height -1 - ((wy - mapData.info.origin.position.y) / mapData.info.resolution)
   return {px, py}
 }
+
+// ----- Le Chef d'Orchestre Graphique (renderCanvas) -----
 
 //Le chef d'orchestre qui superpose tout !
 function renderCanvas(){
@@ -425,6 +550,8 @@ function renderCanvas(){
 
 }
 
+// ----- Le Relais du Lidar (drawLidar) -----
+
 //Dessin du LIDAR
 function drawLidar(msg) {
   currentScan = msg
@@ -432,7 +559,8 @@ function drawLidar(msg) {
   if (mapData) renderCanvas()
 }
 
-// ---- FONCTION ANALYTICS (INFLUXDB -> CHART.JS) ----
+// ----- Dashboard Analytique (InfluxDB -> Chart.js) -----
+
 function fetchAndDrawChart() {
   const queryApi = influxDB.getQueryApi(influxOrg)
   // Requête Flux : On prend la télémétrie des 5 dernières minutes
@@ -509,6 +637,8 @@ function fetchAndDrawChart() {
     }
   })
 }
+
+// ----- Interactivité et Export (Analytics) -----
 
 function openAnalytics() {
   activeTab.value = 'analytics'
@@ -665,33 +795,50 @@ function downloadChart() {
 
           <div class="card" style="margin-top: 10px;">
             <h2>Caméra Robot</h2>
-            <canvas id="cameraCanvas" width="640" height="480" style="width: 100%; border-radius: 8px; background: #000;">
-            </canvas>
+            <img id="cameraStream" src="http://localhost:8080/stream?topic=/depth_camera/rgb/image_raw" 
+                 style="width: 100%; border-radius: 8px; background: #000;" alt="Flux Vidéo ROS2" />
           </div>
         </div>
         <!-- CARTE : SYSTEM STATUS-->
         <div class="card">
           <h2>System Status</h2>
+
           <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; 
-          border-bottom:1px solid var(--border-color); padding-bottom:10px;">
+          border-bottom:1px solid var(--border-color); padding-bottom:10px; margin-bottom:12px;">
             <span style="font-size:12px; color:var(--text-muted)">ROBOT STATE</span>
             <span :class="['badge', getStateColor(robotState)]">{{ robotState }}</span>
           </div>
 
           <div style="display:flex; flex-direction: column; gap:8px; font-size:12px;">
+            <!-- LIDAR -->
             <div style="display:flex; justify-content:space-between;">
-              <span style="color:var(--text-muted)">LIDAR (/scan)</span>
-              <span :style="{ color: sensors.lidar === 'ACTIVE' ? 'var(--accent-green)' : 'var(--accent-red)'}">{{sensors.lidar}}</span>
+              <span style="color:var(--text-muted)">LIDAR</span>
+              <span :style="{
+                color: sensors.lidar === 'OK' ? 'var(--accent-green)' :
+                       sensors.lidar === 'WARN' ? 'var(--accent-yellow)' :
+                       (sensors.lidar === 'ERROR' || sensors.lidar === 'STALE') ? 'var(--accent-red)' :
+                       'var(--text-secondary)'
+              }">{{ sensors.lidar }}</span>
             </div>
-
+            <!-- CAMERA -->
             <div style="display:flex; justify-content:space-between;">
-              <span style="color:var(--text-muted)">Camera (/depth_camera)</span>
-              <span :style="{ color: sensors.camera === 'ACTIVE' ? 'var(--accent-green)' : 'var(--accent-red)'}">{{sensors.camera}}</span>
+              <span style="color:var(--text-muted)">CAMERA</span>
+              <span :style="{
+                color: sensors.camera === 'OK' ? 'var(--accent-green)' :
+                       sensors.camera === 'WARN' ? 'var(--accent-yellow)' :
+                       (sensors.camera === 'ERROR' || sensors.camera === 'STALE') ? 'var(--accent-red)' :
+                       'var(--text-secondary)'
+              }">{{ sensors.camera }}</span>
             </div>
-            
+            <!-- MAP -->
             <div style="display:flex; justify-content:space-between;">
-              <span style="color:var(--text-muted)">SLAM (/map)</span>
-              <span :style="{ color: sensors.map === 'ACTIVE' ? 'var(--accent-green)' : 'var(--accent-red)'}">{{ sensors.map }}</span>
+              <span style="color:var(--text-muted)">MAP</span>
+              <span :style="{
+                color: sensors.map === 'OK' ? 'var(--accent-green)' :
+                       sensors.map === 'WARN' ? 'var(--accent-yellow)' :
+                       (sensors.map === 'ERROR' || sensors.map === 'STALE') ? 'var(--accent-red)' :
+                       'var(--text-secondary)'
+              }">{{ sensors.map }}</span>
             </div>
           </div>
         </div>
@@ -755,16 +902,30 @@ function downloadChart() {
             }">
             {{ isEStopActive ? "⚠️ ARRÊT D\'URGENCE VERROUILLÉ" : "🛑 ARRÊT D\'URGENCE" }}
           </button>
+          <button 
+            @click="resetSimulation" 
+            class="btn" 
+            :style="{ 
+              width: '100%', 
+              marginBottom: '15px', 
+              padding: '12px', 
+              fontWeight: 'bold',
+              background: 'rgba(245,158,11,0.15)',
+              color: 'var(--accent-yellow)',
+              border: '2px solid var(--accent-yellow)'
+            }">
+            🔄 RÉINITIALISER LA SIMULATION
+          </button>
           <h2>Contrôle Manuel</h2>
           <div class="ctrl-grid">
             <div></div>
-            <button class="ctrl-btn" @mousedown="startVel(maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel">▲</button>
+            <button class="ctrl-btn" @mousedown="startVel(maxLinearSpeed, 0)" @touchstart="startVel(maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▲</button>
             <div></div>
-            <button class="ctrl-btn" @mousedown="startVel(0, maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel">◀</button>
+            <button class="ctrl-btn" @mousedown="startVel(0, maxAngularSpeed)" @touchstart="startVel(0, maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">◀</button>
             <button class="ctrl-btn ctrl-stop" @click="stopVel">⏹</button>
-            <button class="ctrl-btn" @mousedown="startVel(0, -maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel">▶</button>
+            <button class="ctrl-btn" @mousedown="startVel(0, -maxAngularSpeed)" @touchstart="startVel(0, -maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▶</button>
             <div></div>
-            <button class="ctrl-btn" @mousedown="startVel(-maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel">▼</button>
+            <button class="ctrl-btn" @mousedown="startVel(-maxLinearSpeed, 0)" @touchstart="startVel(-maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▼</button>
             <div></div>
           </div>
 
