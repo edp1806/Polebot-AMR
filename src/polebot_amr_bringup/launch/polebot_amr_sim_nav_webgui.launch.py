@@ -247,6 +247,15 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}]
     )
 
+    # Noeud qui publie la position exacte du robot sur /robot_pose (pour le Dashboard Web)
+    pose_publisher_node = Node(
+        package='polebot_analytics',
+        executable='pose_publisher',
+        name='pose_publisher',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}]
+    )
+
     # Create the launch description and populate
     ld = LaunchDescription()
 
@@ -282,5 +291,6 @@ def generate_launch_description():
     ld.add_action(rviz_cmd)
     ld.add_action(bringup_cmd)
     ld.add_action(rosbridge_server_node)
+    ld.add_action(pose_publisher_node)
 
     return ld
