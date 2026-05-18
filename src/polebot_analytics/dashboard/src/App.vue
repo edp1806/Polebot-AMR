@@ -4,30 +4,32 @@ import * as ROSLIB from 'roslib'
 import { InfluxDB, Point } from '@influxdata/influxdb-client'
 import Chart from 'chart.js/auto'
 
-// --- CONFIGURATION INFLUXDB ---
-const influxURL = 'http://localhost:8086'
+// --- INFLUXDB CONFIGURATION ---
+const hostIp = window.location.hostname || 'localhost'
+const influxURL = `http://${hostIp}:8086`
 const influxToken = 'O6KdiXqBpyFcH1PlGx2GkVWjaUz6ptHEdA7nAwZsGA-DtC_un7iuWinrxczOF79ss1cb5ItgvqLjjRyaKDNXLQ=='
-const influxOrg = '2fb3ec77104ac02e' // Utilisation de l'ID exact de votre organisation
+const influxOrg = '2fb3ec77104ac02e' // Using the exact ID of your organization
 const influxBucket = 'polebot_data'
 
 const influxDB = new InfluxDB({ url: influxURL, token: influxToken })
-const writeApi = influxDB.getWriteApi(influxOrg, influxBucket, 'ms') // ms = Précision à la milliseconde
+const writeApi = influxDB.getWriteApi(influxOrg, influxBucket, 'ms') // ms = Millisecond precision
 
 
-// Nos variables réactives (si elles changent, l'interface se met à jour)
-const wsUrl = ref('ws://localhost:9090')
+// Reactive variables (if they change, the UI updates)
+const wsUrl = ref(`ws://${hostIp}:9090`)
 const connected = ref(false)
 const connecting = ref(false)
 const mapCanvas = ref(null)
-const mapInfo = ref('En attente de la carte...')
-const battery = ref(100) // Batterie a 100% au départ
-const maxLinearSpeed = ref(0.5)  // Vitesse d'avance (m/s)
-const maxAngularSpeed = ref(0.5) // Vitesse de rotation (rad/s)
-const isEStopActive = ref(false) // État du bouton d'arrêt d'urgence
-const logs = ref([]) // tableau vide au départ
-const showLidar = ref(true) // Controle de l'affichage du LiDAR
-const mapZoom = ref(1) // 1 = 100%, 0.5 = 50% (dézoom), 2 = 200% (zoom)
-const activeTab = ref('control') // Variable pour savoir quel onglet est ouvert
+const mapInfo = ref('Waiting for map...')
+const battery = ref(100) // Battery a 100% au départ
+const maxLinearSpeed = ref(0.5)  // Linear speed (m/s)
+const maxAngularSpeed = ref(0.5) // Angular speed (rad/s)
+const isEStopActive = ref(false) // Emergency stop button state
+const logs = ref([]) // empty array at startup
+const showLidar = ref(true) // LiDAR display control
+const mapZoom = ref(1) // 1 = 100%, 0.5 = 50% (zoom out), 2 = 200% (zoom in)
+const activeTab = ref('control') // Variable to know which tab is open
+const selectedRobotId = ref('polebot_01') // Fleet robot selector
 const showBatteryLine = ref(true)
 const showLinearSpeedLine = ref(true)
 const showAngularSpeedLine = ref(true)
@@ -39,21 +41,21 @@ let speedChartInstance = null
 let trajectoryChartInstance = null
 let positionChartInstance = null
 let expandedChartInstance = null
-// Données partagées pour le modal agrandi
+// Shared data for the expanded modal
 let chartDataCache = { labels: [], battery: [], linear: [], angular: [], trajectory: [], posX: [], posY: [] }
 let mapCtx = null
-let ros = null // L'objet qui gérera la connexion
+let ros = null // The object that will manage the connection
 let cmdVelTopic = null
 let velInterval = null
-let connectTimeout = null // Ajouté pour éviter l'erreur dans disconnectRos
+let connectTimeout = null // Added to prevent error in disconnectRos
 let mapData = null
 let mapImageData = null
 let currentScan = null
-// On récupère l'heure du dernier reset depuis le localStorage (survit au rafraîchissement)
+// Retrieve the last reset time from localStorage (survives refresh)
 let chartStartTime = localStorage.getItem('chartStartTime') ? new Date(localStorage.getItem('chartStartTime')) : null
 
-// ---- SOLUTION D'EXPERT : Web Worker pour la Carte ----
-// Création d'un Worker dynamique pour calculer l'image de la carte en arrière-plan (sans bloquer l'UI)
+// ---- EXPERT SOLUTION: Web Worker for the Map ----
+// Create a dynamic Worker to calculate the map image in the background (without blocking the UI)
 const mapWorkerCode = `
 self.onmessage = function(e) {
   const { data, width, height } = e.data;
@@ -65,17 +67,17 @@ self.onmessage = function(e) {
       const value = data[index];
       const pixelIndex = ((height - 1 - y) * width + x) * 4;
       
-      if (value === -1) { // Inconnu (Gris foncé)
+      if (value === -1) { // Unknown (Dark gray)
         pixelData[pixelIndex] = 15; pixelData[pixelIndex+1] = 22; pixelData[pixelIndex+2] = 41; pixelData[pixelIndex+3] = 255;
-      } else if (value === 0) { // Vide (Gris très clair)
+      } else if (value === 0) { // Empty (Gris très clair)
         pixelData[pixelIndex] = 220; pixelData[pixelIndex+1] = 220; pixelData[pixelIndex+2] = 225; pixelData[pixelIndex+3] = 255;
-      } else { // Mur / Obstacle (Rouge vif)
+      } else { // Wall / Obstacle (Bright red)
         pixelData[pixelIndex] = 239; pixelData[pixelIndex+1] = 68; pixelData[pixelIndex+2] = 68; pixelData[pixelIndex+3] = 255;
       }
     }
   }
   
-  // On renvoie le tableau calculé au fil principal
+  // Send the calculated array back to the main thread
   self.postMessage({ pixelData, width, height }, [pixelData.buffer]);
 }
 `;
@@ -87,7 +89,7 @@ mapWorker.onmessage = function(e) {
   mapImageData = new ImageData(pixelData, width, height);
 };
 
-// Variable réactive pour la position du robot
+// Reactive variable for the robot position
 const odom = ref({
   x: '0.00',
   y: '0.00',
@@ -96,97 +98,111 @@ const odom = ref({
   angular_speed: '0.00'
 })
 
-// ----- Batterie et Data Historian -----
+// ----- Battery et Data Historian -----
 
 setInterval(() => {
   if (!connected.value) return
 
-  // 1. DÉCHARGE SIMULÉE DE LA BATTERIE
-  // Calcul : 100% / 10800 secondes (3h) ≈ 0.0093% par seconde
+  // 1. SIMULATED BATTERY DISCHARGE
+  // Calculation: 100% / 10800 seconds (3h) ≈ 0.0093% per second
   if (parseFloat(odom.value.linear_speed) !== 0 || parseFloat(odom.value.angular_speed) !== 0) {
     battery.value = Math.max(0, battery.value - 0.0093)
   }
 
-  // 2. BOUCLIER DE SÉCURITÉ
-  // ⚠️ AVIS ARCHITECTURE ROS2 :
-  // Gérer la sécurité depuis le Dashboard web est dangereux (risque de perte de Wi-Fi ou plantage navigateur).
-  // Dans un vrai système, cette logique de "bouclier" (blocage cmd_vel) doit être implémentée 
-  // dans un nœud ROS2 embarqué (C++ ou Python) directement sur le robot.
+  // 2. SAFETY SHIELD
+  // ⚠️ ROS2 ARCHITECTURE NOTICE:
+  // Managing safety from the web Dashboard is dangerous (risk of Wi-Fi loss or browser crash).
+  // In a real system, this "shield" logic (blocking cmd_vel) must be implemented 
+  // in an embedded ROS2 node (C++ or Python) directly on the robot.
   if (battery.value < 20 || isEStopActive.value) stopVel()
-  if (battery.value < 20) addLog(`Batterie critique : ${battery.value.toFixed(1)}%`, 'error')
-  if (battery.value === 0) addLog("Batterie vide ! Le robot s'est arrêté.", 'error')
+  if (battery.value < 20) addLog(`Critical battery: ${battery.value.toFixed(1)}%`, 'error')
+  if (battery.value === 0) addLog("Empty battery! Robot stopped.", 'error')
 
-  // 3. ENVOI DES DONNÉES À INFLUXDB (Data Historian)
+  // 3. SEND DATA TO INFLUXDB (Data Historian)
   try {
-    const point = new Point('telemetry') // Le nom de la "table"
-      .tag('robot_id', 'polebot_01')     // Étiquette pour identifier ce robot spécifique
-      .tag('state', robotState.value)    // État du robot (MOVING, IDLE, OFFLINE)
+    // Virtual proximity sensor calculation (Lidar)
+    let minDistance = 999.0
+    if (typeof currentScan !== 'undefined' && currentScan && currentScan.ranges) {
+      for (let i = 0; i < currentScan.ranges.length; i++) {
+        const d = currentScan.ranges[i]
+        if (d !== null && d >= currentScan.range_min && d <= currentScan.range_max) {
+          if (d < minDistance) minDistance = d
+        }
+      }
+    }
+    // If there is no valid point, set a default value of 10 meters
+    if (minDistance === 999.0) minDistance = 10.0
+
+    const point = new Point('telemetry') // The name of the "table"
+      .tag('robot_id', 'polebot_01')     // Tag to identify this specific robot
+      .tag('state', robotState.value)    // Robot state (MOVING, IDLE, OFFLINE)
       .floatField('battery_level', battery.value)
       .floatField('linear_speed', parseFloat(odom.value.linear_speed))
       .floatField('angular_speed', parseFloat(odom.value.angular_speed))
       .floatField('position_x', parseFloat(odom.value.x))
       .floatField('position_y', parseFloat(odom.value.y))
       .floatField('orientation_yaw', parseFloat(odom.value.yaw))
+      .booleanField('estop_active', isEStopActive.value)       // NEW: Emergency stop
+      .floatField('min_obstacle_distance', minDistance)        // NEW: Lidar virtual bumper
     
-    writeApi.writePoint(point) // On met le point dans la boîte aux lettres
-    // Optimisation : On ne force plus le flush() à chaque seconde.
-    // On laisse le client InfluxDB grouper (batch) les envois en arrière-plan pour de meilleures performances.
+    writeApi.writePoint(point) // Put the point in the mailbox
+    writeApi.flush() // Force send to database so charts update in real time!
   } catch (err) {
-    console.error("Erreur d'écriture InfluxDB :", err)
+    console.error("InfluxDB write error:", err)
   }
 }, 1000)
 
 
-// ----- Gestion des États et de l'UI -----
+// ----- State and UI Management -----
 
-// ⚠️ AVIS ARCHITECTURE ROS2 :
-// Détecter l'état via la réception de données brutes est imprécis.
-// La bonne pratique (Standard ROS2) est d'utiliser `diagnostic_msgs` sur le topic `/diagnostics`
-// où le robot publie un "Heartbeat" officiel de l'état de chaque composant (OK, WARN, ERROR).
-//État de santé des capteurs
+// ⚠️ ROS2 ARCHITECTURE NOTICE:
+// Detecting state via raw data reception is imprecise.
+// The best practice (ROS2 Standard) is to use `diagnostic_msgs` on the `/diagnostics` topic
+// where the robot publishes an official "Heartbeat" of each component's state (OK, WARN, ERROR).
+// Sensor health state
 const sensors = ref({ 
   lidar: 'WAITING',
   camera: 'WAITING',
   map: 'WAITING'
 })
 
-// ⚠️ AVIS ARCHITECTURE ROS2 :
-// Déduire l'état uniquement à partir de la vitesse (odom) est une approche limitée.
-// Si le robot est bloqué physiquement mais que les moteurs tournent, le dashboard affichera "MOVING".
-// L'approche industrielle : utiliser les Managed Nodes (Lifecycle) ou écouter le serveur
-// d'action de navigation (ex: Nav2) pour connaître le véritable état logique du robot.
-// L'état du robot se calcule tout seul en fonction de la vitesse !
+// ⚠️ ROS2 ARCHITECTURE NOTICE:
+// Deducing state solely from speed (odom) is a limited approach.
+// If the robot is physically blocked but the motors are running, the dashboard will show "MOVING".
+// The industrial approach: use Managed Nodes (Lifecycle) or listen to the
+// navigation action server (e.g., Nav2) to know the true logical state of the robot.
+// The robot state calculates itself based on speed!
 const robotState = computed(() => {
   if(!connected.value) return 'OFFLINE'
   if(parseFloat(odom.value.linear_speed) !== 0 || parseFloat(odom.value.angular_speed) !==0) return 'MOVING'
-  return 'IDLE' //Repos
+  return 'IDLE' //Idle
 })
 
-// On crée une fonction pour obtenir le style CSS en fonction de l'état
+// We create a function to get the CSS style based on the state
 const getStateColor = (state) => {
   switch (state) {
-    case 'MOVING': return 'badge-green' // Vert
+    case 'MOVING': return 'badge-green' // Green
     case 'IDLE': return 'badge-yellow' // Orange
-    case 'OFFLINE': return 'badge-red' // Rouge
+    case 'OFFLINE': return 'badge-red' // Red
     default: return ''
   }
 }
 
-// ----- Fonction Centrale de Connexion ROS (connectRos) -----
+// ----- Central ROS Connection Function (connectRos) -----
 
 async function connectRos() {
   if (connecting.value || connected.value) return
   connecting.value = true
   
   try {
-    // Création de la connexion vers ws://localhost:9090
+    // Creation of the connection to ws://localhost:9090
     ros = new ROSLIB.Ros({ url: wsUrl.value })
 
-    // Événement : Connexion réussie
+    // Event: Connection successful
     ros.on('connection', () => {
       connected.value = true
       connecting.value = false
-      addLog('Connecté à ROSBridge !', 'success')
+      addLog('Connected to ROSBridge!', 'success')
     })
 
     // ---- PUBLISHER /cmd_vel ----
@@ -196,7 +212,7 @@ async function connectRos() {
       messageType: 'geometry_msgs/msg/Twist'
     })
 
-    // ---- ABONNEMENT À /odom ----
+    // ---- SUBSCRIPTION TO /odom ----
     const odomListener = new ROSLIB.Topic({
       ros: ros,
       name: '/odom',
@@ -204,13 +220,13 @@ async function connectRos() {
     })
 
     odomListener.subscribe((message) => {
-      // On n'extrait plus que les vitesses depuis /odom (l'odométrie pure dérive)
+      // We only extract speeds from /odom (pure odometry drifts)
       odom.value.linear_speed = message.twist.twist.linear.x.toFixed(2)
       odom.value.angular_speed = message.twist.twist.angular.z.toFixed(2)
     })
     // ----------------------------
 
-    // ---- ABONNEMENT À /robot_pose (Position exacte sur la Carte SLAM) ----
+    // ---- SUBSCRIPTION TO /robot_pose (Exact Position on SLAM Map) ----
     const poseListener = new ROSLIB.Topic({
       ros: ros,
       name: '/robot_pose',
@@ -218,11 +234,11 @@ async function connectRos() {
     })
 
     poseListener.subscribe((message) => {
-      // Extraction de la position X et Y sur la map
+      // Extraction of X and Y position on the map
       odom.value.x = message.pose.position.x.toFixed(2)
       odom.value.y = message.pose.position.y.toFixed(2)
 
-      // Extraction de l'angle Yaw
+      // Extraction of Yaw angle
       const q = message.pose.orientation
       const siny_cosp = 2 * (q.w * q.z + q.x * q.y)
       const cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
@@ -230,7 +246,7 @@ async function connectRos() {
     })
     // ----------------------------
 
-    // ---- ABONNEMENT À /map ----
+    // ---- SUBSCRIPTION TO /map ----
     const mapListener = new ROSLIB.Topic({
       ros: ros,
       name: '/map',
@@ -238,12 +254,12 @@ async function connectRos() {
     })
 
     mapListener.subscribe((message) => {
-      mapInfo.value = `Taille : ${message.info.width}x${message.info.height} (Résolution: ${message.info.resolution.toFixed(3)}m/px)`
+      mapInfo.value = `Size: ${message.info.width}x${message.info.height} (Resolution: ${message.info.resolution.toFixed(3)}m/px)`
       drawMap(message)
     })
     // ----------------------------
 
-    // ---- ABONNEMENT AU LIDAR ----
+    // ---- SUBSCRIPTION TO LIDAR ----
     const lidarListener = new ROSLIB.Topic({
       ros: ros,
       name: '/scan',
@@ -253,26 +269,26 @@ async function connectRos() {
       drawLidar(message)
     })
 
-    // Événement : Erreur
+    // Event: Error
     ros.on('error', (error) => {
       connecting.value = false
-      addLog("Erreur de connexion ROS", "error")
+      addLog("ROS connection error", "error")
     })
 
-    // Événement : Déconnexion
+    // Event: Disconnection
     ros.on('close', () => {
       connected.value = false
       connecting.value = false
-      addLog("Déconnecté de ROSBridge", "error")
+      addLog("Disconnected from ROSBridge", "error")
     })
   } catch (err) {
-    addLog("Erreur d'import ou de connexion", "error")
+    addLog("Import or connection error", "error")
     connecting.value = false
   }
 
   // ----------------------------
 
-  // ---- ABONNEMENT AU DIAGNOSTICS (Heartbeat Capteurs) ----
+  // ---- SUBSCRIPTION TO DIAGNOSTICS (Sensor Heartbeat) ----
   const diagListener = new ROSLIB.Topic({
     ros: ros,
     name: '/diagnostics',
@@ -280,9 +296,9 @@ async function connectRos() {
   })
 
   diagListener.subscribe((message) => {
-    // message.status est une liste (array) de tous les capteurs
+    // message.status is an array of all sensors
     message.status.forEach((status) => {
-      // Traduction du niveau d'erreur ROS2 (0=OK, 1= WARN, 2=ERROR, 3=STALE)
+      // Translation of ROS2 error level (0=OK, 1=WARN, 2=ERROR, 3=STALE)
       let stateStr = 'UNKNOWN'
       if (status.level === 0) stateStr = 'OK'
       else if (status.level === 1) stateStr = 'WARN'
@@ -302,7 +318,7 @@ async function connectRos() {
   })
 }
 
-// ----- Système de Logs et Arrêt d'Urgence -----
+// ----- Système de Logs et Emergency Stop -----
 
 function addLog(message, type = 'info'){
   const now = new Date()
@@ -322,7 +338,7 @@ function addLog(message, type = 'info'){
 
 function getLogColor(type){
   switch (type){
-    case 'error': return 'var(--accent-red)' // Rouge pour les pannes/urgences
+    case 'error': return 'var(--accent-red)' // Red pour les pannes/urgences
     case 'warning': return 'var(--accent-yellow)' // Jaune pour les alertes (batterie)
     case "success": return 'var(--accent-green)' // vert pour les succés
     default : return 'var(--text-secondary)' // Couleur par défaut
@@ -459,7 +475,7 @@ function drawMap(msg) {
   })
 }
 
-// ---- Coordonnées Spatiales ----
+// ---- Spatial Coordinates ----
 
 //Convertit des mėtres (Monde ROS) en pixels (Canvas HTML)
 function worldToCanvas(wx,wy){
@@ -469,7 +485,7 @@ function worldToCanvas(wx,wy){
   return {px, py}
 }
 
-// ----- Le Chef d'Orchestre Graphique (renderCanvas) -----
+// ----- The Graphical Conductor (renderCanvas) -----
 
 //Le chef d'orchestre qui superpose tout !
 function renderCanvas(){
@@ -487,15 +503,15 @@ function renderCanvas(){
 
 
 
-  // Couche 3 : On dessine le robot par dessus (Point Bleu)
-  // 1. Le corps du robot (Cercle Bleu)
+  // Layer 3: Draw the robot on top (Blue Point)
+  // 1. The robot body (Blue Circle)
   mapCtx.beginPath()
   mapCtx.arc(px, py, 4, 0, 2*Math.PI)
-  mapCtx.fillStyle = '#3b82f6' // Bleu
+  mapCtx.fillStyle = '#3b82f6' // Blue
   mapCtx.fill()
 
-  // 2. La flèche de direction (Ligne Noire)
-  // On calcule un point virtuel situé 50 cm (0.5m) devant le robot
+  // 2. Direction arrow (Black Line)
+  // We calculate a virtual point 50 cm (0.5m) in front of the robot
   const frontX = rx + (Math.cos(yawRobot) * 0.5) 
   const frontY = ry + (Math.sin(yawRobot) * 0.5)
   const {px: fpx, py: fpy} = worldToCanvas(frontX, frontY)
@@ -503,8 +519,8 @@ function renderCanvas(){
   mapCtx.beginPath()
   mapCtx.moveTo(px, py)
   mapCtx.lineTo(fpx, fpy)
-  mapCtx.strokeStyle = '#000000' // Noir pour contraster avec le fond gris clair de la carte
-  mapCtx.lineWidth = 3 // Trait plus épais
+  mapCtx.strokeStyle = '#000000' // Black to contrast with the light gray map background
+  mapCtx.lineWidth = 3 // Thicker stroke
   mapCtx.stroke()
 
 }
@@ -516,7 +532,7 @@ function drawLidar(msg) {
   currentScan = msg
 }
 
-// ----- LA GAME LOOP (Optimisation Industrielle) -----
+// ----- THE GAME LOOP (Industrial Optimization) -----
 let isLoopRunning = false
 function startRenderLoop() {
   if (connected.value) {
@@ -524,15 +540,15 @@ function startRenderLoop() {
   }
   requestAnimationFrame(startRenderLoop)
 }
-// Démarrage de la boucle infinie dès le chargement du script
+// Start the infinite loop as soon as the script loads
 if (!isLoopRunning) {
   isLoopRunning = true
   requestAnimationFrame(startRenderLoop)
 }
 
-// ----- Dashboard Analytique (InfluxDB -> Chart.js) -----
+// ----- Analytical Dashboard (InfluxDB -> Chart.js) -----
 
-// Plugin pour forcer un fond blanc (utile pour l'export PNG)
+// Plugin to force a white background (useful for PNG export)
 const whiteBackgroundPlugin = {
   id: 'customCanvasBackgroundColor',
   beforeDraw: (chart) => {
@@ -552,6 +568,8 @@ function fetchAndDrawChart() {
     from(bucket: "${influxBucket}")
       |> range(start: ${startRange})
       |> filter(fn: (r) => r._measurement == "telemetry")
+      |> filter(fn: (r) => r.robot_id == "${selectedRobotId.value}")
+      |> filter(fn: (r) => r._field != "estop_active")
       |> aggregateWindow(every: 30s, fn: mean, createEmpty: false)
       |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
   `
@@ -593,7 +611,7 @@ function fetchAndDrawChart() {
         if (batteryChartInstance) batteryChartInstance.destroy()
         batteryChartInstance = new Chart(ctxBat, {
           type: 'line',
-          data: { labels, datasets: [{ label: 'Batterie (%)', data: batteryData, borderColor: '#3b82f6', borderWidth: 2, pointRadius: 0, fill: true, backgroundColor: 'rgba(59,130,246,0.1)' }] },
+          data: { labels, datasets: [{ label: 'Battery (%)', data: batteryData, borderColor: '#3b82f6', borderWidth: 2, pointRadius: 0, fill: true, backgroundColor: 'rgba(59,130,246,0.1)' }] },
           options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100 } } },
           plugins: [whiteBackgroundPlugin]
         })
@@ -604,8 +622,8 @@ function fetchAndDrawChart() {
       if (ctxSpd) {
         if (speedChartInstance) speedChartInstance.destroy()
         const datasets = [
-          { label: 'V. Linéaire (m/s)', data: linearSpeedData, borderColor: '#ef4444', borderWidth: 2, pointRadius: 0, hidden: !showLinearSpeedLine.value },
-          { label: 'V. Angulaire (rad/s)', data: angularSpeedData, borderColor: '#eab308', borderWidth: 2, pointRadius: 0, hidden: !showAngularSpeedLine.value }
+          { label: 'V. Linear (m/s)', data: linearSpeedData, borderColor: '#ef4444', borderWidth: 2, pointRadius: 0, hidden: !showLinearSpeedLine.value },
+          { label: 'V. Angular (rad/s)', data: angularSpeedData, borderColor: '#eab308', borderWidth: 2, pointRadius: 0, hidden: !showAngularSpeedLine.value }
         ]
         speedChartInstance = new Chart(ctxSpd, {
           type: 'line',
@@ -683,14 +701,14 @@ watch(expandedChart, (chartType) => {
     if (chartType === 'battery') {
       expandedChartInstance = new Chart(ctx, {
         type: 'line',
-        data: { labels: d.labels, datasets: [{ label: 'Batterie (%)', data: d.battery, borderColor: '#3b82f6', borderWidth: 2, pointRadius: 1, fill: true, backgroundColor: 'rgba(59,130,246,0.1)' }] },
+        data: { labels: d.labels, datasets: [{ label: 'Battery (%)', data: d.battery, borderColor: '#3b82f6', borderWidth: 2, pointRadius: 1, fill: true, backgroundColor: 'rgba(59,130,246,0.1)' }] },
         options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 } } },
         plugins: [whiteBackgroundPlugin]
       })
     } else if (chartType === 'speed') {
       const datasets = [
-        { label: 'V. Linéaire (m/s)', data: d.linear, borderColor: '#ef4444', borderWidth: 2, pointRadius: 1, hidden: !showLinearSpeedLine.value },
-        { label: 'V. Angulaire (rad/s)', data: d.angular, borderColor: '#eab308', borderWidth: 2, pointRadius: 1, hidden: !showAngularSpeedLine.value }
+        { label: 'V. Linear (m/s)', data: d.linear, borderColor: '#ef4444', borderWidth: 2, pointRadius: 1, hidden: !showLinearSpeedLine.value },
+        { label: 'V. Angular (rad/s)', data: d.angular, borderColor: '#eab308', borderWidth: 2, pointRadius: 1, hidden: !showAngularSpeedLine.value }
       ]
       expandedChartInstance = new Chart(ctx, {
         type: 'line',
@@ -777,7 +795,7 @@ function resetChart(){
     if (ctxBat) {
       batteryChartInstance = new Chart(ctxBat, {
         type: 'line',
-        data: { labels: [resetTimeLabel], datasets: [{ label: 'Batterie (%)', data: [100], borderColor: '#3b82f6', borderWidth: 2, pointRadius: 4, fill: true, backgroundColor: 'rgba(59,130,246,0.1)' }] },
+        data: { labels: [resetTimeLabel], datasets: [{ label: 'Battery (%)', data: [100], borderColor: '#3b82f6', borderWidth: 2, pointRadius: 4, fill: true, backgroundColor: 'rgba(59,130,246,0.1)' }] },
         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100 } } },
         plugins: [whiteBackgroundPlugin]
       })
@@ -787,60 +805,83 @@ function resetChart(){
 </script>
 
 <template>
-  <div class="dashboard">
-    <!-- HEADER : Barre du haut avec le logo et la connexion -->
-    <header class="header">
-      <div class="logo">
-        <span style="font-size:28px">🤖</span>
+  <div style="display:flex; height:100vh; background:var(--bg-main); color:var(--text-primary); font-family:'Inter', sans-serif; overflow: hidden;">
+    
+    <!-- LEFT SIDEBAR -->
+    <aside style="width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; z-index: 10;">
+      <!-- Brand / Logo -->
+      <div style="padding: 20px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 10px;">
+        <div style="font-size: 26px;">🤖</div>
         <div>
-          <div style="font-size:16px; font-weight:700">Polebot AMR</div>
-          <div style="font-size:11px; color:#475569">Analytics Dashboard</div>
+          <h1 style="margin: 0; font-size: 16px; font-weight: 700; color: #fff; letter-spacing: 0.5px;">Polebot AMR</h1>
+          <div style="font-size: 11px; color: var(--accent-blue); font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Fleet Manager</div>
         </div>
       </div>
 
-      <div class="connection-bar">
-        <!-- Champ pour l'URL WebSocket et Bouton de connexion -->
-        <input v-model="wsUrl" class="ws-input" placeholder="ws://localhost:9090" :disabled="connected" />
-        <button v-if="!connected" @click="connectRos" class="btn btn-primary" :disabled="connecting">
-          {{ connecting ? '⏳ Connecting...' : '🔌 Connect' }}
+      <!-- Navigation -->
+      <nav style="padding: 20px 10px; flex: 1;">
+        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 12px; padding-left: 10px;">Applications</div>
+        
+        <button @click="activeTab = 'control'" class="sidebar-item" :class="{ 'active': activeTab === 'control' }">
+          <span style="font-size: 16px;">🎮</span> Live Control
         </button>
-        <button v-else @click="disconnectRos" class="btn btn-danger">⏹ Disconnect</button>
-        <!-- Statut de connexion et Batterie-->
-        <div style="display:flex; align-items:center; gap:20px;">
-          <!--Jauge de Batterie-->
-          <div style="display:flex; align-items:center; font-size:14px; font-weight:700; background:var(--bg-card);
-          padding:4px 12px; border-radius:20px; border:1px solid var(--border-color);">
-            <span v-if="battery > 20" style="color:var(--accent-green)">🔋 {{ Math.round(battery) }}%</span>
-            <span v-else style="color:var(--accent-red)">🪫 {{ Math.round(battery) }}%</span>
+        
+        <button @click="openAnalytics()" class="sidebar-item" :class="{ 'active': activeTab === 'analytics' }">
+          <span style="font-size: 16px;">📈</span> Analytics History
+        </button>
+      </nav>
+
+      <!-- Fleet Selector -->
+      <div style="padding: 15px 10px; border-top: 1px solid var(--border-color); background: var(--bg-sidebar);">
+        <div style="font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 10px; padding-left: 10px; display:flex; justify-content:space-between; align-items:center;">
+          <span>Active Fleet</span>
+          <span class="badge badge-green pulse" style="font-size:9px; padding:2px 6px;">1 Online</span>
+        </div>
+
+        <!-- Selected Robot -->
+        <div class="fleet-item" :class="{ 'selected': selectedRobotId === 'polebot_01' }" @click="selectedRobotId = 'polebot_01'; fetchAndDrawChart()">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div class="status-dot green pulse"></div>
+            <span style="font-size: 13px; font-weight: 500; color:#fff;">polebot_01</span>
           </div>
+          <div style="font-size:11px; font-weight:600; color:var(--accent-green);">{{ Math.round(battery) }}% 🔋</div>
         </div>
       </div>
+    </aside>
 
-      <!-- Statut de connexion et Heure -->
-      <div style="display:flex; align-items:center; gap:16px">
-        <span :class="['badge', connected ? 'badge-green' : 'badge-red']">
-          <span :class="{ pulse: connected }">●</span>
-          {{ connected ? 'ONLINE' : 'OFFLINE' }}
-        </span>
-      </div>
-    </header>
+    <!-- MAIN CONTENT AREA -->
+    <main style="flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; background: var(--bg-main);">
+      
+      <!-- TOP HEADER -->
+      <header style="height: 65px; min-height: 65px; padding: 0 25px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); background: var(--bg-header); box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+        <div style="font-size: 18px; font-weight: 600; color: #fff; display: flex; align-items: center; gap: 10px;">
+          {{ activeTab === 'control' ? 'Live Teleoperation' : 'Analytics & Data Historian' }}
+          <span style="color:var(--text-muted); font-size:14px; font-weight:400;">/ {{ selectedRobotId }}</span>
+        </div>
 
-    <!-- 1. LE MENU DES ONGLETS -->
-    <div style="display:flex; gap:10px; padding: 10px 20px; background:var(--bg-secondary); border-bottom:1px solid var(--border-color);">
-      <button class="btn" :style="activeTab === 'control' ? 'background:var(--accent-blue); color:white' : ''" @click="activeTab = 'control'">
-        🎮 Live Control
-      </button>
-      <button class="btn" :style="activeTab === 'analytics' ? 'background:var(--accent-blue); color:white' : ''" @click="openAnalytics">
-        📈 Historique Analytics
-      </button>
-    </div>
+        <div style="display: flex; align-items: center; gap: 15px;">
+          <input v-model="wsUrl" placeholder="ws://localhost:9090" :disabled="connected" style="background:var(--bg-secondary); border:1px solid var(--border-color); color:#fff; padding:6px 12px; border-radius:6px; font-size:12px; width:180px;" />
+          <span class="badge" :class="connected ? 'badge-green pulse' : 'badge-red'" style="padding: 6px 12px; font-size:11px;">
+            {{ connected ? '● ROS2 Connected' : '● ROS2 Offline' }}
+          </span>
+          <button v-if="!connected" @click="connectRos" class="btn btn-primary" :disabled="connecting" style="padding: 6px 16px;">
+            {{ connecting ? 'Connecting...' : '▶ Connect' }}
+          </button>
+          <button v-else @click="disconnectRos" class="btn btn-danger" style="padding: 6px 16px;">⏹ Disconnect</button>
+        </div>
+      </header>
 
     <!-- 2. ONGLET ANALYTICS -->
-    <div v-if="activeTab === 'analytics'" style="padding: 15px; flex: 1; display: flex; flex-direction: column; overflow-y: auto;">
+    <div v-if="activeTab === 'analytics'" style="padding: 15px; flex: 1; display: flex; flex-direction: column; overflow: hidden;">
       
       <!-- Barre d'outils globale -->
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
-        <h2 style="margin:0;">📊 Historique InfluxDB (Session complète)</h2>
+        <div style="display:flex; gap:15px; align-items:center;">
+          <h2 style="margin:0;">📊 InfluxDB History (Full Session)</h2>
+          <select v-model="selectedRobotId" @change="fetchAndDrawChart" style="padding:4px 8px; border-radius:6px; background:var(--bg-secondary); color:var(--text-primary); border:1px solid var(--border-color); font-size:12px; cursor:pointer;">
+            <option value="polebot_01">🤖 polebot_01</option>
+          </select>
+        </div>
         <button class="btn btn-reset" @click="resetChart" style="padding: 5px 10px; font-size:11px;">
           🔄 Reset
         </button>
@@ -849,10 +890,10 @@ function resetChart(){
       <!-- Grille 2x2 des graphiques -->
       <div style="display:grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap:12px; flex:1;">
         
-        <!-- 1. Batterie -->
-        <div class="card chart-card" @click="expandedChart = 'battery'" style="min-height:250px; display:flex; flex-direction:column; cursor:pointer;">
+        <!-- 1. Battery -->
+        <div class="card chart-card" @click="expandedChart = 'battery'" style="display:flex; flex-direction:column; cursor:pointer;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h3 style="margin:0; font-size:13px;">🔋 Batterie</h3>
+            <h3 style="margin:0; font-size:13px;">🔋 Battery</h3>
             <div style="display:flex; gap:10px; align-items:center;">
               <button class="btn btn-primary" @click.stop="downloadChart" style="padding: 4px 8px; font-size:10px;">
                 💾 Save
@@ -860,21 +901,21 @@ function resetChart(){
               <span style="font-size:10px; color:var(--text-muted);">🔍 Click to enlarge</span>
             </div>
           </div>
-          <div style="flex:1; position:relative; min-height:200px;">
+          <div style="flex:1; position:relative; min-height: 0;">
             <canvas id="batteryChart"></canvas>
           </div>
         </div>
 
-        <!-- 2. Vitesses -->
-        <div class="card chart-card" @click="expandedChart = 'speed'" style="min-height:250px; display:flex; flex-direction:column; cursor:pointer;">
+        <!-- 2. Speeds -->
+        <div class="card chart-card" @click="expandedChart = 'speed'" style="display:flex; flex-direction:column; cursor:pointer;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h3 style="margin:0; font-size:13px;">⚡ Vitesses</h3>
+            <h3 style="margin:0; font-size:13px;">⚡ Speeds</h3>
             <div style="display:flex; gap:8px; align-items:center;" @click.stop>
               <label style="font-size:10px; cursor:pointer; color:var(--text-primary);">
-                <input type="checkbox" v-model="showLinearSpeedLine"> Linéaire
+                <input type="checkbox" v-model="showLinearSpeedLine"> Linear
               </label>
               <label style="font-size:10px; cursor:pointer; color:var(--text-primary);">
-                <input type="checkbox" v-model="showAngularSpeedLine"> Angulaire
+                <input type="checkbox" v-model="showAngularSpeedLine"> Angular
               </label>
               <button class="btn btn-primary" @click="downloadChart" style="padding: 4px 8px; font-size:10px;">
                 💾 Save
@@ -882,15 +923,15 @@ function resetChart(){
               <span style="font-size:10px; color:var(--text-muted);">🔍 Click to enlarge</span>
             </div>
           </div>
-          <div style="flex:1; position:relative; min-height:200px;">
+          <div style="flex:1; position:relative; min-height: 0;">
             <canvas id="speedChart"></canvas>
           </div>
         </div>
 
         <!-- 3. Trajectoire X/Y -->
-        <div class="card chart-card" @click="expandedChart = 'trajectory'" style="min-height:250px; display:flex; flex-direction:column; cursor:pointer;">
+        <div class="card chart-card" @click="expandedChart = 'trajectory'" style="display:flex; flex-direction:column; cursor:pointer;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h3 style="margin:0; font-size:13px;">🗺️ Trajectoire (X/Y)</h3>
+            <h3 style="margin:0; font-size:13px;">🗺️ Trajectory (X/Y)</h3>
             <div style="display:flex; gap:10px; align-items:center;">
               <button class="btn btn-primary" @click.stop="downloadChart" style="padding: 4px 8px; font-size:10px;">
                 💾 Save
@@ -898,15 +939,15 @@ function resetChart(){
               <span style="font-size:10px; color:var(--text-muted);">🔍 Click to enlarge</span>
             </div>
           </div>
-          <div style="flex:1; position:relative; min-height:200px;">
+          <div style="flex:1; position:relative; min-height: 0;">
             <canvas id="trajectoryChart"></canvas>
           </div>
         </div>
 
         <!-- 4. Position au fil du temps -->
-        <div class="card chart-card" @click="expandedChart = 'position'" style="min-height:250px; display:flex; flex-direction:column; cursor:pointer;">
+        <div class="card chart-card" @click="expandedChart = 'position'" style="display:flex; flex-direction:column; cursor:pointer;">
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h3 style="margin:0; font-size:13px;">📍 Position (Temps)</h3>
+            <h3 style="margin:0; font-size:13px;">📍 Position (Time)</h3>
             <div style="display:flex; gap:8px; align-items:center;" @click.stop>
               <label style="font-size:10px; cursor:pointer; color:var(--text-primary);">
                 <input type="checkbox" v-model="showPosXLine"> X(m)
@@ -920,7 +961,7 @@ function resetChart(){
               <span style="font-size:10px; color:var(--text-muted);">🔍 Click to enlarge</span>
             </div>
           </div>
-          <div style="flex:1; position:relative; min-height:200px;">
+          <div style="flex:1; position:relative; min-height: 0;">
             <canvas id="positionChart"></canvas>
           </div>
         </div>
@@ -934,15 +975,15 @@ function resetChart(){
       <div class="card" @click.stop style="width:90vw; height:85vh; display:flex; flex-direction:column;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
           <h2 style="margin:0;">
-            {{ expandedChart === 'battery' ? '🔋 Batterie' : expandedChart === 'speed' ? '⚡ Vitesses' : expandedChart === 'trajectory' ? '🗺️ Trajectoire' : '📍 Position' }}
+            {{ expandedChart === 'battery' ? '🔋 Battery' : expandedChart === 'speed' ? '⚡ Speeds' : expandedChart === 'trajectory' ? '🗺️ Trajectoire' : '📍 Position' }}
           </h2>
           <div style="display:flex; gap:10px; align-items:center;">
             <div v-if="expandedChart === 'speed'" style="display:flex; gap:10px;">
               <label style="font-size:12px; cursor:pointer; color:var(--text-primary);">
-                <input type="checkbox" v-model="showLinearSpeedLine"> ⬆️ Linéaire
+                <input type="checkbox" v-model="showLinearSpeedLine"> ⬆️ Linear
               </label>
               <label style="font-size:12px; cursor:pointer; color:var(--text-primary);">
-                <input type="checkbox" v-model="showAngularSpeedLine"> 🔄 Angulaire
+                <input type="checkbox" v-model="showAngularSpeedLine"> 🔄 Angular
               </label>
             </div>
             <div v-if="expandedChart === 'position'" style="display:flex; gap:10px;">
@@ -953,7 +994,7 @@ function resetChart(){
                 <input type="checkbox" v-model="showPosYLine"> 🟠 Y(m)
               </label>
             </div>
-            <button class="btn btn-danger" @click="expandedChart = null" style="padding:5px 12px;">✕ Fermer</button>
+            <button class="btn btn-danger" @click="expandedChart = null" style="padding:5px 12px;">✕ Close</button>
           </div>
         </div>
         <div style="flex:1; position:relative;">
@@ -962,12 +1003,12 @@ function resetChart(){
       </div>
     </div>
 
-    <!-- 3. ONGLET CONTROL : GRID PRINCIPALE (Contient les 3 colonnes de notre dashboard) -->
-    <main class="main-grid" v-show="activeTab === 'control'">
-      <!-- Colonne GAUCHE (Données en direct) -->
+    <!-- 3. CONTROL TAB: MAIN GRID (Contains the 3 columns of our dashboard) -->
+    <div class="main-grid" v-show="activeTab === 'control'">
+      <!-- LEFT Column (Live data) -->
       <div class="col">
         <div class="card">
-          <h2>Position & Vitesses</h2>
+          <h2>Position & Speeds</h2>
           
           <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
             <div>
@@ -982,22 +1023,22 @@ function resetChart(){
 
           <div style="display:flex; justify-content:space-between;">
             <div>
-              <div style="font-size:10px; color:var(--text-muted)">VITESSE LINÉAIRE</div>
+              <div style="font-size:10px; color:var(--text-muted)">LINEAR SPEED</div>
               <div style="font-size:20px; font-family:monospace; color:var(--text-primary)">{{ odom.linear_speed }} m/s</div>
             </div>
             <div>
-              <div style="font-size:10px; color:var(--text-muted)">VITESSE ANGULAIRE</div>
+              <div style="font-size:10px; color:var(--text-muted)">ANGULAR SPEED</div>
               <div style="font-size:20px; font-family:monospace; color:var(--text-primary)">{{ odom.angular_speed }} rad/s</div>
             </div>
           </div>
 
           <div class="card" style="margin-top: 10px;">
-            <h2>Caméra Robot</h2>
+            <h2>Robot Camera</h2>
             <img id="cameraStream" src="http://localhost:8080/stream?topic=/depth_camera/rgb/image_raw" 
-                 style="width: 100%; border-radius: 8px; background: #000;" alt="Flux Vidéo ROS2" />
+                 style="width: 100%; border-radius: 8px; background: #000;" alt="ROS2 Emptyo Stream" />
           </div>
         </div>
-        <!-- CARTE : SYSTEM STATUS-->
+        <!-- CARD: SYSTEM STATUS -->
         <div class="card">
           <h2>System Status</h2>
 
@@ -1046,29 +1087,35 @@ function resetChart(){
       <!-- Colonne CENTRE (La Carte) -->
       <div class="col-center">
         <div class="card" style="flex:1; display:flex; flex-direction:column; min-height:400px;">
-            <h2>Carte Live (SLAM)</h2>
+            <h2>Live Map (SLAM)</h2>
             <div style="font-size:10px; color:var(--text-muted); margin-bottom:8px">
               {{ mapInfo }}
             </div>
             <div style="display:flex; align-items:center; gap:16px; font-size:11px; color:var(--text-muted); margin-bottom:8px;">
-              <!-- Curseur de Zoom -->
+              <!-- Zoom slider -->
               <div style="display:flex; align-items:center; gap:8px;">
                 <span>Zoom: {{ Math.round(mapZoom * 100) }}%</span>
                 <input type="range" min="0.2" max="3" step="0.1" v-model="mapZoom" style="width:100px;">              
               </div>
             </div>
 
-            <!-- C'est ici qu'on va dessiner la carte avec le zoom et le blocage des débordements -->
-            <div style="flex:1; width:100%; border-radius:8px; background:var(--bg-secondary); overflow:hidden; display:flex; justify-content:center; align-items:center;">
+            <!-- This is where we will draw the map with zoom and overflow blocking -->
+            <div style="flex:1; width:100%; border-radius:8px; background:var(--bg-secondary); overflow:hidden; position:relative;">
               <canvas 
                 ref="mapCanvas" 
-                :style="{ transform: 'scale(' + mapZoom + ')' }"
+                :style="{
+                  position: 'absolute',
+                  left: '50%',
+                  top: '50%',
+                  transform: 'translate(-50%, -50%) scale(' + mapZoom + ')',
+                  transformOrigin: 'center center'
+                }"
               ></canvas>
             </div>
             
             <div style="display:flex; gap:16px; margin-top:12px; font-size:11px; color:var(--text-muted); justify-content:center">
               <span>🔵 Robot</span>
-              <span>⬜ Vide</span>
+              <span>⬜ Empty</span>
               <span>🔴 Obstacle</span>
             </div>
         </div>
@@ -1078,7 +1125,7 @@ function resetChart(){
       <!-- Colonne DROITE (Contrôles et Logs) -->
       <div class="col">
         
-        <!-- Contrôle Manuel -->
+        <!-- Manual Control -->
         <div class="card">
           <button 
             @mousedown="startEStopPress" 
@@ -1096,9 +1143,9 @@ function resetChart(){
               color: isEStopActive ? '#fff' : 'var(--accent-red)',
               border: '2px solid var(--accent-red)'
             }">
-            {{ isEStopActive ? "⚠️ ARRÊT D\'URGENCE VERROUILLÉ" : "🛑 MAINTENIR 1s POUR ARRÊT D\'URGENCE" }}
+            {{ isEStopActive ? "⚠️ EMERGENCY STOP LOCKED" : "🛑 HOLD 1s FOR EMERGENCY STOP" }}
           </button>
-          <h2>Contrôle Manuel</h2>
+          <h2>Manual Control</h2>
           <div class="ctrl-grid">
             <div></div>
             <button class="ctrl-btn" @mousedown="startVel(maxLinearSpeed, 0)" @touchstart="startVel(maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▲</button>
@@ -1117,12 +1164,12 @@ function resetChart(){
 
           <div style="margin-bottom: 15px; font-size: 12px; color: var(--text-muted);">
             <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-              <span>Vitesse Max (Avant) : {{ maxLinearSpeed }} m/s</span>
+              <span>Max Speed (Linear): {{ maxLinearSpeed }} m/s</span>
             </div>
             <input type="range" min="0.1" max="1.5" step="0.1" v-model.number="maxLinearSpeed" style="width:100%;">
             
             <div style="display:flex; justify-content:space-between; margin-bottom:5px; margin-top:10px;">
-              <span>Vitesse Max (Rotation) : {{ maxAngularSpeed }} rad/s</span>
+              <span>Max Speed (Angular): {{ maxAngularSpeed }} rad/s</span>
             </div>
             <input type="range" min="0.1" max="1.5" step="0.1" v-model.number="maxAngularSpeed" style="width:100%;">
           </div>
@@ -1139,30 +1186,92 @@ function resetChart(){
               <span style="color:var(--text-muted)">[{{ log.time }}]</span>
               {{ log.message }}
               </div>
-            </div>
+        </div>
         </div>
       </div>
-    </main>
-  </div>
+    </div>
+  </main>
+</div>
 </template>
 
-<style scoped>
-/* Structure de la page */
-.dashboard { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
-
-/* En-tête */
-.header {
-  display:flex; align-items:center; justify-content:space-between; padding:12px 20px;
-  background:var(--bg-secondary); border-bottom:1px solid var(--border-color); flex-shrink:0;
+<style>
+/* Very dark theme / Space */
+:root {
+  --bg-main: #e5e7eb; /* Light gray background */
+  --bg-sidebar: #111827;
+  --bg-header: #151e32;
+  --bg-card: #1f2937;
+  --bg-secondary: #374151;
+  --text-primary: #f3f4f6;
+  --text-muted: #9ca3af;
+  --border-color: #2e3a53;
+  --accent-blue: #3b82f6;
+  --accent-green: #10b981;
+  --accent-red: #ef4444;
+  --accent-yellow: #f59e0b;
 }
-.logo { display:flex; align-items:center; gap:12px; }
-.connection-bar { display:flex; gap:8px; }
-.ws-input {
-  background:var(--bg-card); border:1px solid var(--border-color); color:var(--text-primary);
-  padding:6px 12px; border-radius:8px; font-size:13px; width:220px; font-family:monospace;
+
+/* Sidebar Styles */
+.sidebar-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 15px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 5px;
+}
+.sidebar-item:hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--text-primary);
+}
+.sidebar-item.active {
+  background: var(--accent-blue);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
 
-/* Grille 3 colonnes */
+.fleet-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+  margin-bottom: 4px;
+}
+.fleet-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+.fleet-item.selected {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+.fleet-item.offline {
+  opacity: 0.5;
+}
+.fleet-item.offline:hover {
+  opacity: 0.8;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.status-dot.green { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+.status-dot.red { background: var(--accent-red); }
+
+/* Main Grid */
 .main-grid { 
     display:grid; 
     grid-template-columns:300px 1fr 300px; 
@@ -1171,7 +1280,7 @@ function resetChart(){
 .col { display:flex; flex-direction:column; gap:10px; overflow-y:auto; }
 .col-center { display:flex; flex-direction:column; overflow:hidden; }
 
-/* Cartes (fonds gris) */
+/* Cards (gray background) */
 .card { 
     background:var(--bg-card); border:1px solid var(--border-color); 
     border-radius:12px; padding:14px; 
@@ -1180,7 +1289,7 @@ function resetChart(){
 .chart-card:hover { transform: scale(1.02); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
 h2 { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:12px; }
 
-/* Boutons de Contrôle */
+/* Control Buttons */
 .ctrl-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; width: 180px; margin: 0 auto; }
 .ctrl-btn {
   padding:14px 8px; border-radius:8px; border:1px solid var(--border-color);
@@ -1192,18 +1301,19 @@ h2 { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:up
 .ctrl-stop { background:rgba(239,68,68,0.1); border-color:rgba(239,68,68,0.3); color:var(--accent-red); }
 .ctrl-stop:hover { background:rgba(239,68,68,0.2); }
 
-/* Boutons */
+/* Buttons */
 .btn { padding:7px 14px; border-radius:8px; border:none; font-size:13px; font-weight:500; cursor:pointer; }
 .btn-primary { background:var(--accent-blue); color:white; }
 .btn-reset { background:var(--accent-yellow); color:white; }
 .btn-primary:disabled { opacity:0.5; cursor:not-allowed; }
 .btn-danger { background:rgba(239,68,68,0.15); color:var(--accent-red); border:1px solid rgba(239,68,68,0.3); }
 
-/* Badges de statut */
+/* Status badges */
 .badge { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:20px; font-size:12px; font-weight:500; }
 .badge-green { background:rgba(16,185,129,0.15); color:var(--accent-green); border:1px solid rgba(16,185,129,0.3); }
 .badge-yellow { background:rgba(245,158,11,0.15); color:var(--accent-yellow); border:1px solid rgba(245,158,11,0.3); }
 .badge-red { background:rgba(239,68,68,0.15); color:var(--accent-red); border:1px solid rgba(239,68,68,0.3); }
 .pulse { animation:pulse 2s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
 </style>
