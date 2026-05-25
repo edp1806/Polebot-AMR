@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 import { useRos } from './useRos.js'
 
-// --- État singleton ---
+// --- Singleton state ---
 export const isEStopActive = ref(false)
 export const maxLinearSpeed = ref(0.5)   // m/s
 export const maxAngularSpeed = ref(0.5)  // rad/s
@@ -31,7 +31,7 @@ export function useControl() {
     }
   }
 
-  // ----- Système de Logs -----
+  // ----- Log System -----
   function addLog(message, type = 'info') {
     const now = new Date()
     const timeString = now.toLocaleTimeString()
@@ -40,7 +40,7 @@ export function useControl() {
       message: message,
       type: type
     })
-    // On limite le nombre de logs à 20
+    // Limit log count to 20
     if (logs.value.length > 20) {
       logs.value.pop()
     }
@@ -55,9 +55,9 @@ export function useControl() {
     }
   }
 
-  // ⚠️ AVIS ARCHITECTURE ROS2 (Sécurité) :
-  // Un bouton Web est un "Soft E-Stop". Il ne doit JAMAIS remplacer le vrai bouton physique.
-  // Sécurité IHM : Long Press (1 seconde) pour éviter les faux contacts sur écran tactile
+  // ⚠️ ROS2 ARCHITECTURE NOTE (Safety):
+  // A Web button is a "Soft E-Stop". It must NEVER replace a real physical E-stop button.
+  // HMI Safety: Long Press (1 second) to avoid accidental triggers on touchscreens
   function startEStopPress() {
     eStopTimer = setTimeout(() => {
       toggleEStop()
@@ -73,13 +73,13 @@ export function useControl() {
     isEStopActive.value = !isEStopActive.value
     if (isEStopActive.value) {
       stopVel()
-      addLog("Arret d'urgence activé !", "error")
+      addLog("Emergency Stop activated!", "error")
     } else {
-      addLog("Arret d'urgence désactivé !", "success")
+      addLog("Emergency Stop deactivated!", "success")
     }
   }
 
-  // Wrapper qui injecte isEStopActive automatiquement
+  // Wrapper injecting isEStopActive automatically
   function startVelGuarded(linear, angular) {
     startVel(linear, angular, isEStopActive)
   }

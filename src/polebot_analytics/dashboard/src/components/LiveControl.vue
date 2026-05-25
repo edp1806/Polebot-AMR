@@ -3,20 +3,66 @@ import { onMounted, ref } from 'vue'
 import { useRos } from '../composables/useRos.js'
 import { useControl } from '../composables/useControl.js'
 import { useBattery } from '../composables/useBattery.js'
+import { useInfluxDB } from '../composables/useInfluxDB.js'
+import { Point } from '@influxdata/influxdb-client'
 import { useMap } from '../composables/useMap.js'
 import { mapCanvasRef } from '../composables/useMap.js'
 
-const { odom, sensors, mapInfo } = useRos()
+const { odom, sensors, mapInfo, sendNavGoal, cancelNavGoal, sendExplorationEnable, saveMap, clearMapSession } = useRos()
 const { battery } = useBattery()
 const {
   isEStopActive, maxLinearSpeed, maxAngularSpeed, logs,
   robotState, getStateColor, getLogColor,
   startEStopPress, cancelEStopPress,
-  startVelGuarded, stopVel
+  startVelGuarded, stopVel, addLog
 } = useControl()
-const { mapZoom, renderCanvas } = useMap()
+const { writeApi, selectedRobotId } = useInfluxDB()
+const { mapZoom, renderCanvas, canvasToWorld, setGoal, clearGoal } = useMap()
 
 const mapCanvas = ref(null)
+
+const cameraTopic = ref('/depth_camera/rgb/image_raw')
+const hostIp = window.location.hostname || 'localhost'
+
+// --- Mission Cycle Tracker ---
+const missionStartTime = ref(null)
+const missionCycleTime = ref('00:00')
+let missionTimer = null
+
+function startMissionTracker() {
+  missionStartTime.value = Date.now()
+  addLog("🏁 Mission manuelle démarrée !", 'success')
+  
+  missionTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - missionStartTime.value) / 1000)
+    const m = String(Math.floor(elapsed / 60)).padStart(2, '0')
+    const s = String(elapsed % 60).padStart(2, '0')
+    missionCycleTime.value = `${m}:${s}`
+  }, 1000)
+}
+
+function endMissionTracker() {
+  if (!missionStartTime.value) return
+  clearInterval(missionTimer)
+  
+  const finalTime = missionCycleTime.value
+  addLog(`✅ Mission terminée. Cycle Time : ${finalTime}`, 'success')
+  
+  if (writeApi) {
+    const parts = finalTime.split(':')
+    const seconds = parseInt(parts[0]) * 60 + parseInt(parts[1])
+    
+    const point = new Point('mission_performance')
+      .tag('robot', selectedRobotId.value)
+      .floatField('cycle_time_s', seconds)
+      
+    writeApi.writePoint(point)
+    writeApi.flush()
+  }
+  
+  missionStartTime.value = null
+  missionCycleTime.value = '00:00'
+}
 
 // ----- THE GAME LOOP -----
 let isLoopRunning = false
@@ -64,12 +110,6 @@ onMounted(() => {
             <div style="font-size:20px; font-family:monospace; color:var(--text-primary)">{{ odom.angular_speed }} rad/s</div>
           </div>
         </div>
-
-        <div class="card" style="margin-top: 10px;">
-          <h2>Robot Camera</h2>
-          <img id="cameraStream" src="http://localhost:8080/stream?topic=/depth_camera/rgb/image_raw" 
-               style="width: 100%; border-radius: 8px; background: #000;" alt="ROS2 Camera Stream" />
-        </div>
       </div>
 
       <!-- CARD: SYSTEM STATUS -->
@@ -115,14 +155,33 @@ onMounted(() => {
           </div>
         </div>
       </div>
+
+      <!-- LIVE CAMERA FEED -->
+      <div class="card" style="margin-top: 15px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h2 style="margin:0;">📷 Live Camera</h2>
+          <input type="text" v-model="cameraTopic" placeholder="/depth_camera/rgb/image_raw" style="width: 170px; font-size: 10px; padding: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px;">
+        </div>
+        <div style="background: #000; border-radius: 6px; overflow: hidden; min-height: 160px; display: flex; align-items: center; justify-content: center; position: relative;">
+          <div style="color: var(--text-muted); font-size: 11px; position: absolute; text-align: center; padding: 10px;">
+            Waiting for camera feed...<br>
+            <code style="font-size: 9px;">ros2 run web_video_server web_video_server</code>
+          </div>
+          <img :src="`http://${hostIp}:8080/stream?topic=${cameraTopic}`" style="width: 100%; position: relative; z-index: 1; display: none;" onload="this.style.display='block'" onerror="this.style.display='none'" />
+        </div>
+      </div>
     </div>
 
-    <!-- Colonne CENTRE (La Carte) -->
+    <!-- CENTER COLUMN (The Map) -->
     <div class="col-center">
       <div class="card" style="flex:1; display:flex; flex-direction:column; min-height:400px;">
-          <h2>Live Map (SLAM)</h2>
-          <div style="font-size:10px; color:var(--text-muted); margin-bottom:8px">
-            {{ mapInfo }}
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+            <div>
+              <h2 style="margin:0;">Live Map (SLAM)</h2>
+              <div style="font-size:10px; color:var(--text-muted);">
+                {{ mapInfo }}
+              </div>
+            </div>
           </div>
           <div style="display:flex; align-items:center; gap:16px; font-size:11px; color:var(--text-muted); margin-bottom:8px;">
             <div style="display:flex; align-items:center; gap:8px;">
@@ -153,9 +212,31 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Colonne DROITE (Contrôles et Logs) -->
+    <!-- RIGHT COLUMN (Controls and Logs) -->
     <div class="col">
       
+      <!-- MISSION CYCLE TRACKER -->
+      <div class="card" style="margin-bottom: 15px; border-left: 4px solid var(--accent-green);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h2 style="margin:0;">⏱️ Cycle Tracker</h2>
+          <span style="font-family: monospace; font-size: 18px; font-weight:bold; color: var(--accent-green);">
+            {{ missionCycleTime }}
+          </span>
+        </div>
+        <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px; margin-top: -5px;">
+          Manual mission time recording
+        </p>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <button v-if="!missionStartTime" class="btn btn-primary" style="padding: 12px; font-weight: bold; width: 100%; background: var(--accent-green);" @click="startMissionTracker()">
+            ▶️ Start Mission
+          </button>
+          
+          <button v-else class="btn" style="padding: 12px; font-weight: bold; width: 100%; background: rgba(239,68,68,0.2); border: 1px solid var(--accent-red); color: var(--accent-red);" @click="endMissionTracker()">
+            ⏹️ End Mission (Save Cycle Time)
+          </button>
+        </div>
+      </div>
+
       <!-- Manual Control -->
       <div class="card">
         <button 
@@ -179,18 +260,18 @@ onMounted(() => {
         <h2>Manual Control</h2>
         <div class="ctrl-grid">
           <div></div>
-          <button class="ctrl-btn" @mousedown="startVelGuarded(maxLinearSpeed, 0)" @touchstart="startVelGuarded(maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▲</button>
+          <button class="ctrl-btn" @mousedown.prevent="startVelGuarded(maxLinearSpeed, 0)" @touchstart.prevent="startVelGuarded(maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▲</button>
           <div></div>
-          <button class="ctrl-btn" @mousedown="startVelGuarded(0, maxAngularSpeed)" @touchstart="startVelGuarded(0, maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">◀</button>
-          <button class="ctrl-btn ctrl-stop" @click="stopVel">⏹</button>
-          <button class="ctrl-btn" @mousedown="startVelGuarded(0, -maxAngularSpeed)" @touchstart="startVelGuarded(0, -maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▶</button>
+          <button class="ctrl-btn" @mousedown.prevent="startVelGuarded(0, maxAngularSpeed)" @touchstart.prevent="startVelGuarded(0, maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">◀</button>
+          <button class="ctrl-btn ctrl-stop" @mousedown.prevent="stopVel" @touchstart.prevent="stopVel">⏹</button>
+          <button class="ctrl-btn" @mousedown.prevent="startVelGuarded(0, -maxAngularSpeed)" @touchstart.prevent="startVelGuarded(0, -maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▶</button>
           <div></div>
-          <button class="ctrl-btn" @mousedown="startVelGuarded(-maxLinearSpeed, 0)" @touchstart="startVelGuarded(-maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▼</button>
+          <button class="ctrl-btn" @mousedown.prevent="startVelGuarded(-maxLinearSpeed, 0)" @touchstart.prevent="startVelGuarded(-maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▼</button>
           <div></div>
         </div>
 
         <div style="text-align:center; font-size:11px; color:var(--text-muted); margin-top:8px">
-          Maintenez cliqué pour piloter
+          Press and hold to steer
         </div>
 
         <div style="margin-bottom: 15px; font-size: 12px; color: var(--text-muted);">

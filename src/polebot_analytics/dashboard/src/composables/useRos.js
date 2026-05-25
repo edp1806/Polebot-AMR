@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import * as ROSLIB from 'roslib'
 
-// --- État singleton (partagé entre tous les composants) ---
+// --- Singleton state (shared across all components) ---
 export const connected = ref(false)
 export const connecting = ref(false)
 export const odom = ref({
@@ -135,19 +135,18 @@ export function useRos() {
     })
   }
 
-  // ----- Déconnexion -----
+  // ----- Disconnect -----
   function disconnectRos(addLog) {
     if (ros) ros.close()
     if (velInterval) clearInterval(velInterval)
     if (connectTimeout) clearTimeout(connectTimeout)
     connected.value = false
     connecting.value = false
-    addLog("Déconnexion manuelle effectuée.", "info")
+    addLog("Manual disconnect completed.", "info")
   }
 
-  // ----- Contrôle Manuel -----
+  // ----- Manual Control -----
   function startVel(linear, angular, isEStopActive) {
-    if (isEStopActive.value) return
     if (!cmdVelTopic || !connected.value) return
     if (velInterval) clearInterval(velInterval)
 
@@ -160,7 +159,7 @@ export function useRos() {
     }, 100)
   }
 
-  // ⚠️ AVIS ARCHITECTURE ROS2 : utiliser twist_mux pour la priorité des commandes
+  // ⚠️ ROS2 ARCHITECTURE NOTE: use twist_mux for command priorities
   function stopVel() {
     if (velInterval) clearInterval(velInterval)
     if (!cmdVelTopic || !connected.value) return
@@ -174,6 +173,69 @@ export function useRos() {
     }, 100)
   }
 
+  // --- NAVIGATION (Nav2) ---
+  function sendNavGoal(wx, wy) {
+    if (!ros) return
+    const goalTopic = new ROSLIB.Topic({
+      ros: ros,
+      name: '/goal_pose',
+      messageType: 'geometry_msgs/PoseStamped'
+    })
+    const goalMsg = {
+      header: { frame_id: 'map' },
+      pose: {
+        position: { x: wx, y: wy, z: 0.0 },
+        orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 } // Facing forward by default
+      }
+    }
+    goalTopic.publish(goalMsg)
+  }
+
+  function cancelNavGoal() {
+    // Nav2 actions can be cancelled by publishing empty GoalID to /navigate_to_pose/_action/cancel
+    // Or simpler: publish zeros to /cmd_vel which we already do via stopVel()
+    // A more formal way is to send an empty cancel action goal.
+    if (!ros) return
+    const cancelTopic = new ROSLIB.Topic({
+      ros: ros,
+      name: '/navigate_to_pose/_action/cancel',
+      messageType: 'action_msgs/CancelGoalService'
+    })
+    cancelTopic.publish({})
+  }
+
+  function sendExplorationEnable(enable) {
+    if (!ros) return
+    const exploreTopic = new ROSLIB['Topic']({
+      ros: ros,
+      name: '/explore_enable',
+      messageType: 'std_msgs/Bool'
+    })
+    exploreTopic.publish({ data: enable })
+  }
+
+  function saveMap() {
+    if (!ros) return
+    const topic = new ROSLIB['Topic']({
+      ros: ros,
+      name: '/map_command',
+      messageType: 'std_msgs/String'
+    })
+    topic.publish({ data: 'save' })
+    console.log("Map save command sent!")
+  }
+
+  function clearMapSession() {
+    if (!ros) return
+    const topic = new ROSLIB['Topic']({
+      ros: ros,
+      name: '/map_command',
+      messageType: 'std_msgs/String'
+    })
+    topic.publish({ data: 'clear' })
+    console.log("Map clear command sent!")
+  }
+
   return {
     connected,
     connecting,
@@ -183,6 +245,11 @@ export function useRos() {
     connectRos,
     disconnectRos,
     startVel,
-    stopVel
+    stopVel,
+    sendNavGoal,
+    cancelNavGoal,
+    sendExplorationEnable,
+    saveMap,
+    clearMapSession
   }
 }

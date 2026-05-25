@@ -7,7 +7,7 @@ import { useControl } from '../composables/useControl.js'
 const {
   selectedRobotId, selectedTimeRange, expandedChart,
   showLinearSpeedLine, showAngularSpeedLine, showPosXLine, showPosYLine,
-  fetchAndDrawChart, downloadChart, resetChart,
+  fetchAndDrawChart, downloadChart, resetChart, changeTimeRange,
   drawExpandedChart, destroyExpandedChart,
   updateSpeedChartVisibility, updatePositionChartVisibility
 } = useInfluxDB()
@@ -51,11 +51,11 @@ function handleReset() {
         🔄 Reset
       </button>
       <div style="display:flex; gap:5px;">
-        <button class="btn" :class="selectedTimeRange === '-5m' ? 'btn-primary' : ''" @click="selectedTimeRange = '-5m'; fetchAndDrawChart()" style="padding:4px 8px; font-size:11px;">5m</button>
-        <button class="btn" :class="selectedTimeRange === '-30m' ? 'btn-primary' : ''" @click="selectedTimeRange = '-30m'; fetchAndDrawChart()" style="padding:4px 8px; font-size:11px;">30m</button>
-        <button class="btn" :class="selectedTimeRange === '-1h' ? 'btn-primary' : ''" @click="selectedTimeRange = '-1h'; fetchAndDrawChart()" style="padding:4px 8px; font-size:11px;">1h</button>
-        <button class="btn" :class="selectedTimeRange === '-4h' ? 'btn-primary' : ''" @click="selectedTimeRange = '-4h'; fetchAndDrawChart()" style="padding:4px 8px; font-size:11px;">4h</button>
-        <button class="btn" :class="selectedTimeRange === '-24h' ? 'btn-primary' : ''" @click="selectedTimeRange = '-24h'; fetchAndDrawChart()" style="padding:4px 8px; font-size:11px;">24h</button>
+        <button class="btn" :class="selectedTimeRange === '-5m' ? 'btn-primary' : ''" @click="changeTimeRange('-5m')" style="padding:4px 8px; font-size:11px;">5m</button>
+        <button class="btn" :class="selectedTimeRange === '-30m' ? 'btn-primary' : ''" @click="changeTimeRange('-30m')" style="padding:4px 8px; font-size:11px;">30m</button>
+        <button class="btn" :class="selectedTimeRange === '-1h' ? 'btn-primary' : ''" @click="changeTimeRange('-1h')" style="padding:4px 8px; font-size:11px;">1h</button>
+        <button class="btn" :class="selectedTimeRange === '-4h' ? 'btn-primary' : ''" @click="changeTimeRange('-4h')" style="padding:4px 8px; font-size:11px;">4h</button>
+        <button class="btn" :class="selectedTimeRange === '-24h' ? 'btn-primary' : ''" @click="changeTimeRange('-24h')" style="padding:4px 8px; font-size:11px;">24h</button>
       </div>
     </div>
 

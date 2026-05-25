@@ -1,33 +1,38 @@
 import { ref, computed } from "vue"
 
-//Déclaration des variables réactives
+// Reactive variables declaration
 const battery = ref(100)
 const batteryHistory = ref([])
-const usageTime = ref(0)
+// Retrieve usage time from the browser if it exists, otherwise 0
+const usageTime = ref(parseInt(localStorage.getItem('polebot_usage_time')) || 0)
+// Retrieve the session start date from the browser
+const sessionStartTime = ref(localStorage.getItem('polebot_session_start') || null)
+
+
 
 export function useBattery() {
     const dischargeRate = computed(() => {
-        // S'il n'y a pas de données, on retourne 0
+        // If there are no data points, return 0
         if (batteryHistory.value.length < 2) return 0
 
-        //La différence entre la plus ancienne et la plus récente valeur
+        // The difference between the oldest and newest values
         const oldest = batteryHistory.value[0]
         const newest = batteryHistory.value[batteryHistory.value.length - 1]
         const elapsedSeconds = batteryHistory.value.length
-        // car 1 valeur = 1 seconde
+        // since 1 value = 1 second
 
-        //Calcul : (perte / temps en secondes) * 60 = %/min
+        // Calculation: (discharge / time in seconds) * 60 = %/min
         return ((oldest - newest) / elapsedSeconds) * 60
     })
 
     const estimatedAutonomy = computed(() => {
         const rate = dischargeRate.value
-        // Si le taux est 0, on évite la division par 0
+        // If the rate is 0, avoid division by 0
         if (rate <= 0) return "-"
-        // On calcule en minutes
+        // Calculate in minutes
         const minutesLeft = battery.value / rate
 
-        // Conversion en heures et minutes
+        // Convert to hours and minutes
         const hours = Math.floor(minutesLeft / 60)
         const minutes = Math.floor(minutesLeft % 60)
 
@@ -35,7 +40,7 @@ export function useBattery() {
         return `${minutes} min`
     })
 
-    // Formatage du temps d'utilisation (HH:MM:SS) pour l'affichage UI
+    // Formatting usage time (HH:MM:SS) for UI display
     const formattedUsageTime = computed(() => {
         const h = Math.floor(usageTime.value / 3600)
         const m = Math.floor((usageTime.value % 3600) / 60)
@@ -47,37 +52,53 @@ export function useBattery() {
         // MODE SIMULATION: Battery is artificially discharged (0.0093%/s when moving)
         // MODE REAL ROBOT: Battery level will come from ROS topic /battery_status (sensor_msgs/BatteryState)
 
+        if (!sessionStartTime.value) {
+            const now = new Date().toISOString()
+            sessionStartTime.value = now
+            localStorage.setItem('polebot_session_start', now)
+            localStorage.setItem('polebot_usage_time', 0)
+        }
+
         if (isSimulated) {
-            // MODE SIMULATION: On calcule la décharge nous-mêmes
+            // SIMULATION MODE: Calculate discharge rate programmatically
             if (linearSpeed !== 0 || angularSpeed !== 0) {
-                battery.value = Math.max(0, battery.value - 1)
+                battery.value = Math.max(0, battery.value - 0.0093)
             }
         } else {
-            // MODE ROBOT RÉEL: On utilise la donnée brute de la batterie
+            // REAL ROBOT MODE: Use raw telemetry battery level
             battery.value = parseFloat(batteryLevel)
         }
 
-        // Enregistrer l'historique (pour le calcul du taux de décharge)
+        // Register battery history (for discharge rate calculation)
         batteryHistory.value.push(battery.value)
 
-        // Limiter la taille de l'historique (garder les 60 dernières valeurs = 1 minute)
+        // Keep only the last 60 values (representing 1 minute of telemetry)
         if (batteryHistory.value.length > 60) {
-            batteryHistory.value.shift() // Retire la plus ancienne valeur
+            batteryHistory.value.shift() // Remove the oldest value
         }
 
-        // Incrémenter le compteur de temps (+1 seconde par appel)
+        // Increment the time counter (+1 second per tick)
         usageTime.value++
+        // Persist to localStorage to survive page reload
+        localStorage.setItem('polebot_usage_time', usageTime.value)
 
     }
 
     // ----- DATA CLEANING ----- 
-    // Fonction pour réinitialiser l'historique et le temps
+    // Functions to reset battery and usage metrics
+
+    function resetUsageTime() {
+        usageTime.value = 0
+        localStorage.setItem('polebot_usage_time', 0)
+        sessionStartTime.value = null
+        localStorage.removeItem('polebot_session_start')
+    }
+
     function resetBattery() {
         battery.value = 100
         batteryHistory.value = []
-        usageTime.value = 0
 
-        // On sauvegarde aussi dans le localStorage pour que le compteur reste à 0 après un rafraîchissement
+        // Persist start timestamp in localStorage to sync chart timeline
         localStorage.setItem('chartStartTime', new Date().toISOString())
     }
 
@@ -88,7 +109,9 @@ export function useBattery() {
         formattedUsageTime,
         dischargeRate,
         estimatedAutonomy,
+        sessionStartTime,
         updateBattery,
-        resetBattery
+        resetBattery,
+        resetUsageTime
     }
 }

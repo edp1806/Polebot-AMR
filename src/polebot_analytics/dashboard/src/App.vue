@@ -10,33 +10,40 @@ import KpiDashboard from './components/KpiDashboard.vue'
 import LiveControl from './components/LiveControl.vue'
 import AnalyticsHistory from './components/AnalyticsHistory.vue'
 
-// --- Composables singletons ---
-const { battery, updateBattery } = useBattery()
+// --- Singleton composables ---
+const { battery, usageTime, sessionStartTime, resetUsageTime, updateBattery } = useBattery()
 const { connected, connecting, odom, connectRos: _connectRos, disconnectRos: _disconnectRos } = useRos()
 const { isEStopActive, stopVel, addLog } = useControl()
-const { selectedRobotId, openAnalytics, writeApi } = useInfluxDB()
+const { selectedRobotId, openAnalytics, writeApi, saveSessionToInflux } = useInfluxDB()
 const { currentScan, drawMap, drawLidar } = useMap()
 
-// --- Variables locales à App.vue ---
+// --- App.vue local variables ---
 const hostIp = window.location.hostname || 'localhost'
 const wsUrl = ref(`ws://${hostIp}:9090`)
 const activeTab = ref('control')
 
-// --- Connexion ROS : wrappers qui injectent les callbacks ---
+// --- ROS Connection: wrappers that inject callbacks ---
 function connectRos() {
   _connectRos(wsUrl.value, addLog, drawMap, drawLidar)
 }
 function disconnectRos() {
-  _disconnectRos(addLog)
+  // 1. Save session to InfluxDB (if active duration is greater than 0s)
+  if(usageTime.value > 0 && sessionStartTime.value){
+    saveSessionToInflux(usageTime.value, sessionStartTime.value);
+  }
+  // 2. Close ROS 2 connection
+  _disconnectRos(addLog);
+  // 3. Reset the timer and clear start time in localStorage
+  resetUsageTime()
 }
 
-// Wrapper pour openAnalytics (activeTab est unwrappé dans le template Vue)
+// Wrapper for openAnalytics (activeTab is unwrapped in Vue template)
 function goToAnalytics() {
   activeTab.value = 'analytics'
   openAnalytics(activeTab)
 }
 
-// --- setInterval : Batterie + InfluxDB (1 fois par seconde) ---
+// --- setInterval: Battery discharge + InfluxDB sync (once per second) ---
 setInterval(() => {
   if (!connected.value) return
 

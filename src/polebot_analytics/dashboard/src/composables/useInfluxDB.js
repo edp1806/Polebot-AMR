@@ -21,6 +21,11 @@ export const showLinearSpeedLine = ref(true)
 export const showAngularSpeedLine = ref(true)
 export const showPosXLine = ref(true)
 export const showPosYLine = ref(true)
+export const averageCycleTime = ref('N/A')
+export const cycleTimeHistory = ref([])
+export const movementEfficiency = ref(0)
+export const stabilityIndex = ref(100)
+export const sessionHistory = ref([])
 
 let batteryChartInstance = null
 let speedChartInstance = null
@@ -48,7 +53,7 @@ export function useInfluxDB() {
 
   function fetchAndDrawChart() {
     const queryApi = influxDB.getQueryApi(influxOrg)
-    
+
     // Calculate the absolute start time based on selectedTimeRange
     let startTimeObj = new Date()
     const range = selectedTimeRange.value
@@ -62,7 +67,7 @@ export function useInfluxDB() {
     if (chartStartTime && chartStartTime > startTimeObj) {
       startTimeObj = chartStartTime
     }
-    
+
     const startRange = startTimeObj.toISOString()
 
     const query = `
@@ -72,7 +77,7 @@ export function useInfluxDB() {
         |> filter(fn: (r) => r.robot_id == "${selectedRobotId.value}")
         |> filter(fn: (r) => r._field != "estop_active")
         |> group(columns: ["_measurement", "robot_id", "_field"])
-        |> aggregateWindow(every: 30s, fn: mean, createEmpty: false)
+        |> aggregateWindow(every: 30s, fn: mean, createEmpty: true)
         |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
         |> group()
         |> sort(columns: ["_time"])
@@ -91,13 +96,16 @@ export function useInfluxDB() {
         const o = tableMeta.toObject(row)
         const time = new Date(o._time).toLocaleTimeString()
         labels.push(time)
-        batteryData.push(o.battery_level || 0)
-        linearSpeedData.push(o.linear_speed || 0)
-        angularSpeedData.push(o.angular_speed || 0)
-        if (o.position_x !== undefined && o.position_y !== undefined) {
+        batteryData.push(o.battery_level ?? null)
+        linearSpeedData.push(o.linear_speed ?? null)
+        angularSpeedData.push(o.angular_speed ?? null)
+        if (o.position_x !== null && o.position_y !== null && o.position_x !== undefined) {
           trajectoryData.push({ x: o.position_x, y: o.position_y })
           posXData.push(o.position_x)
           posYData.push(o.position_y)
+        } else {
+          posXData.push(null)
+          posYData.push(null)
         }
       },
       error(error) {
@@ -105,6 +113,24 @@ export function useInfluxDB() {
       },
       complete() {
         chartDataCache = { labels, battery: batteryData, linear: linearSpeedData, angular: angularSpeedData, trajectory: trajectoryData, posX: posXData, posY: posYData }
+
+        // --- CALCUL DES NOUVEAUX KPIs ---
+        // --- CALCUL DU MOVEMENT EFFICIENCY ---
+        // 1. On nettoie les données pour ignorer les valeurs "nulles" (pertes de connexion)
+        const validLinear = linearSpeedData.filter(v => v !== null)
+        // 2. On compte combien de fois le robot était réellement en mouvement.
+        // On considère qu'il bouge si sa vitesse dépasse 0.02 m/s (pour ignorer le bruit des capteurs à l'arrêt)
+        const movingSamples = validLinear.filter(v => Math.abs(v) > 0.02).length
+        // 3. On calcule le pourcentage d'efficacité (Temps actif / Temps total * 100)
+        movementEfficiency.value = validLinear.length > 0 ? Math.round((movingSamples / validLinear.length) * 100) : 0
+
+
+        let jerkCount = 0
+        for (let i = 1; i < validLinear.length; i++) {
+          if (Math.abs(validLinear[i] - validLinear[i - 1]) > 0.15) jerkCount++
+        }
+        stabilityIndex.value = Math.max(0, 100 - (jerkCount * 2)) // Pénalité de 2% par à-coup
+        // --------------------------------
 
         const ctxBat = document.getElementById('batteryChart')
         if (ctxBat) {
@@ -122,10 +148,12 @@ export function useInfluxDB() {
           if (speedChartInstance) speedChartInstance.destroy()
           speedChartInstance = new Chart(ctxSpd, {
             type: 'line',
-            data: { labels, datasets: [
-              { label: 'V. Linear (m/s)', data: linearSpeedData, borderColor: '#ef4444', borderWidth: 2, pointRadius: 0, hidden: !showLinearSpeedLine.value },
-              { label: 'V. Angular (rad/s)', data: angularSpeedData, borderColor: '#eab308', borderWidth: 2, pointRadius: 0, hidden: !showAngularSpeedLine.value }
-            ]},
+            data: {
+              labels, datasets: [
+                { label: 'V. Linear (m/s)', data: linearSpeedData, borderColor: '#ef4444', borderWidth: 2, pointRadius: 0, hidden: !showLinearSpeedLine.value },
+                { label: 'V. Angular (rad/s)', data: angularSpeedData, borderColor: '#eab308', borderWidth: 2, pointRadius: 0, hidden: !showAngularSpeedLine.value }
+              ]
+            },
             options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { font: { size: 10 } } } } },
             plugins: [whiteBackgroundPlugin]
           })
@@ -147,10 +175,12 @@ export function useInfluxDB() {
           if (positionChartInstance) positionChartInstance.destroy()
           positionChartInstance = new Chart(ctxPos, {
             type: 'line',
-            data: { labels, datasets: [
-              { label: 'X (m)', data: posXData, borderColor: '#10b981', borderWidth: 2, pointRadius: 0, hidden: !showPosXLine.value },
-              { label: 'Y (m)', data: posYData, borderColor: '#f97316', borderWidth: 2, pointRadius: 0, hidden: !showPosYLine.value }
-            ]},
+            data: {
+              labels, datasets: [
+                { label: 'X (m)', data: posXData, borderColor: '#10b981', borderWidth: 2, pointRadius: 0, hidden: !showPosXLine.value },
+                { label: 'Y (m)', data: posYData, borderColor: '#f97316', borderWidth: 2, pointRadius: 0, hidden: !showPosYLine.value }
+              ]
+            },
             options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { font: { size: 10 } } } } },
             plugins: [whiteBackgroundPlugin]
           })
@@ -190,10 +220,12 @@ export function useInfluxDB() {
     } else if (chartType === 'speed') {
       expandedChartInstance = new Chart(ctx, {
         type: 'line',
-        data: { labels: d.labels, datasets: [
-          { label: 'V. Linear (m/s)', data: d.linear, borderColor: '#ef4444', borderWidth: 2, pointRadius: 1, hidden: !showLinearSpeedLine.value },
-          { label: 'V. Angular (rad/s)', data: d.angular, borderColor: '#eab308', borderWidth: 2, pointRadius: 1, hidden: !showAngularSpeedLine.value }
-        ]},
+        data: {
+          labels: d.labels, datasets: [
+            { label: 'V. Linear (m/s)', data: d.linear, borderColor: '#ef4444', borderWidth: 2, pointRadius: 1, hidden: !showLinearSpeedLine.value },
+            { label: 'V. Angular (rad/s)', data: d.angular, borderColor: '#eab308', borderWidth: 2, pointRadius: 1, hidden: !showAngularSpeedLine.value }
+          ]
+        },
         options: { responsive: true, maintainAspectRatio: false },
         plugins: [whiteBackgroundPlugin]
       })
@@ -207,10 +239,12 @@ export function useInfluxDB() {
     } else if (chartType === 'position') {
       expandedChartInstance = new Chart(ctx, {
         type: 'line',
-        data: { labels: d.labels, datasets: [
-          { label: 'X (m)', data: d.posX, borderColor: '#10b981', borderWidth: 2, pointRadius: 1, hidden: !showPosXLine.value },
-          { label: 'Y (m)', data: d.posY, borderColor: '#f97316', borderWidth: 2, pointRadius: 1, hidden: !showPosYLine.value }
-        ]},
+        data: {
+          labels: d.labels, datasets: [
+            { label: 'X (m)', data: d.posX, borderColor: '#10b981', borderWidth: 2, pointRadius: 1, hidden: !showPosXLine.value },
+            { label: 'Y (m)', data: d.posY, borderColor: '#f97316', borderWidth: 2, pointRadius: 1, hidden: !showPosYLine.value }
+          ]
+        },
         options: { responsive: true, maintainAspectRatio: false },
         plugins: [whiteBackgroundPlugin]
       })
@@ -246,6 +280,13 @@ export function useInfluxDB() {
       expandedChartInstance.data.datasets[1].hidden = !showPosYLine.value
       expandedChartInstance.update()
     }
+  }
+
+  function changeTimeRange(range) {
+    selectedTimeRange.value = range
+    chartStartTime = null // Ignore le précédent Reset pour voir le passé
+    localStorage.removeItem('chartStartTime')
+    fetchAndDrawChart()
   }
 
   function downloadChart() {
@@ -284,6 +325,131 @@ export function useInfluxDB() {
     }, 50)
   }
 
+  // --- REQUÊTE CYCLE TIME ---
+  async function fetchCycleTimes() {
+    if (!influxDB || !selectedRobotId.value) return
+    const queryApi = influxDB.getQueryApi(influxOrg)
+
+    // We fetch all cycle times in the current time range
+    let startTimeObj = new Date()
+    const range = selectedTimeRange.value
+    if (range === '-5m') startTimeObj.setMinutes(startTimeObj.getMinutes() - 5)
+    else if (range === '-30m') startTimeObj.setMinutes(startTimeObj.getMinutes() - 30)
+    else if (range === '-1h') startTimeObj.setHours(startTimeObj.getHours() - 1)
+    else if (range === '-4h') startTimeObj.setHours(startTimeObj.getHours() - 4)
+    else if (range === '-24h') startTimeObj.setHours(startTimeObj.getHours() - 24)
+
+    const startRange = startTimeObj.toISOString()
+
+    const query = `
+      from(bucket: "${influxBucket}")
+        |> range(start: ${startRange})
+        |> filter(fn: (r) => r._measurement == "mission_performance")
+        |> filter(fn: (r) => r.robot == "${selectedRobotId.value}")
+        |> filter(fn: (r) => r._field == "cycle_time_s")
+        |> sort(columns: ["_time"])
+    `
+
+    const history = []
+    let totalSecs = 0
+    let count = 0
+
+    try {
+      await new Promise((resolve, reject) => {
+        queryApi.queryRows(query, {
+          next(row, tableMeta) {
+            const o = tableMeta.toObject(row)
+            history.push({ time: new Date(o._time).toLocaleTimeString(), value: o._value })
+            totalSecs += o._value
+            count++
+          },
+          error(error) {
+            reject(error)
+          },
+          complete() {
+            resolve()
+          }
+        })
+      })
+
+      cycleTimeHistory.value = history
+      if (count > 0) {
+        const avg = Math.round(totalSecs / count)
+        const m = String(Math.floor(avg / 60)).padStart(2, '0')
+        const s = String(avg % 60).padStart(2, '0')
+        averageCycleTime.value = `${m}:${s}`
+      } else {
+        averageCycleTime.value = 'N/A'
+      }
+    } catch (e) {
+      console.error("Erreur InfluxDB Cycle Time:", e)
+    }
+  }
+
+  function saveSessionToInflux(durationSeconds, startTimeISO) {
+    if (!writeApi) return
+
+    // Create a new measurement named "robot_session"
+    const point = new Point('robot_session')
+      .tag('robot_id', selectedRobotId.value)
+      .stringField('start_time', startTimeISO)
+      .intField('duration_s', durationSeconds);
+
+    writeApi.writePoint(point);
+
+    // Call ".flush()" to force immediate dispatch to InfluxDB server
+    writeApi.flush().then(() => {
+      console.log("⌚ Session saved in InfluxDB:", durationSeconds, "seconds");
+    }).catch(err => { console.error("Error during session write to InfluxDB:", err); });
+  }
+
+  async function fetchRobotSessions() {
+    if (!influxDB || !selectedRobotId.value) return
+    const queryApi = influxDB.getQueryApi(influxOrg)
+
+    // Query historical sessions for the last 30 days (start: -30d)
+    const query = `
+      from(bucket: "${influxBucket}")
+        |> range(start: -30d)
+        |> filter(fn: (r) => r._measurement == "robot_session")
+        |> filter(fn: (r) => r.robot_id == "${selectedRobotId.value}")
+        // Pivot merges the duration and start_time fields into a single record
+        |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        |> sort(columns: ["_time"], desc: true)
+    `
+
+    const history = []
+
+    try {
+      await new Promise((resolve, reject) => {
+        queryApi.queryRows(query, {
+          next(row, tableMeta) {
+            const o = tableMeta.toObject(row)
+            // Append formatted session record to temp list
+            history.push({
+              endTime: new Date(o._time).toLocaleString(),
+              startTime: o.start_time ? new Date(o.start_time).toLocaleString() : 'Inconnu',
+              duration: o.duration_s ?? 0
+            })
+          },
+          error(error) {
+            reject(error)
+          },
+          complete() {
+            resolve()
+          }
+        })
+      })
+
+      // Update reactively binded global state
+      sessionHistory.value = history
+      console.log("⌚ Session history loaded:", history.length, "sessions found.")
+    } catch (e) {
+      console.error("InfluxDB query error during session history load:", e)
+    }
+  }
+
+
   return {
     // State
     selectedRobotId,
@@ -294,6 +460,11 @@ export function useInfluxDB() {
     showAngularSpeedLine,
     showPosXLine,
     showPosYLine,
+    averageCycleTime,
+    cycleTimeHistory,
+    movementEfficiency,
+    stabilityIndex,
+    sessionHistory,
     // Functions
     fetchAndDrawChart,
     openAnalytics,
@@ -301,8 +472,12 @@ export function useInfluxDB() {
     destroyExpandedChart,
     updateSpeedChartVisibility,
     updatePositionChartVisibility,
+    changeTimeRange,
     downloadChart,
     resetChart,
+    fetchCycleTimes,
+    saveSessionToInflux,
+    fetchRobotSessions,
     // InfluxDB instances (pour App.vue setInterval)
     influxDB,
     writeApi

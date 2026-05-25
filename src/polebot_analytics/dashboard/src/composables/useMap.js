@@ -1,13 +1,14 @@
 import { ref } from 'vue'
 
-// --- État singleton ---
+// --- Singleton state ---
 export const mapZoom = ref(1)
 export const showLidar = ref(true)
-export const mapCanvasRef = ref(null) // Partagé avec LiveControl.vue (template ref)
+export const mapCanvasRef = ref(null) // Shared with LiveControl.vue (template ref)
 
 let mapCtx = null
 let mapData = null
 let mapImageData = null
+let activeGoal = null // Selected destination
 export let currentScan = null
 
 // ---- EXPERT SOLUTION: Web Worker for the Map ----
@@ -47,7 +48,7 @@ mapWorker.onmessage = function(e) {
 
 export function useMap() {
 
-  // Fonction qui transmet la carte au Web Worker pour un dessin en arrière-plan
+  // Function that sends the map to the Web Worker for background calculation
   function drawMap(msg) {
     const canvas = mapCanvasRef.value
     if (!canvas) return
@@ -63,12 +64,28 @@ export function useMap() {
   }
 
   // ---- Spatial Coordinates ----
-  // Convertit des mètres (Monde ROS) en pixels (Canvas HTML)
+  // Convert meters (ROS World) to pixels (HTML Canvas)
   function worldToCanvas(wx, wy) {
     if (!mapData) return { px: 0, py: 0 }
     const px = (wx - mapData.info.origin.position.x) / mapData.info.resolution
     const py = mapData.info.height - 1 - ((wy - mapData.info.origin.position.y) / mapData.info.resolution)
     return { px, py }
+  }
+
+  // Convert pixels (HTML Canvas) to meters (ROS World)
+  function canvasToWorld(px, py) {
+    if (!mapData) return { wx: 0, wy: 0 }
+    const wx = (px * mapData.info.resolution) + mapData.info.origin.position.x
+    const wy = ((mapData.info.height - 1 - py) * mapData.info.resolution) + mapData.info.origin.position.y
+    return { wx, wy }
+  }
+
+  function setGoal(wx, wy) {
+    activeGoal = { x: wx, y: wy }
+  }
+
+  function clearGoal() {
+    activeGoal = null
   }
 
   // ----- The Graphical Conductor (renderCanvas) -----
@@ -80,10 +97,10 @@ export function useMap() {
     // Clear canvas before drawing (in case the map is smaller than the canvas or transparent)
     mapCtx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // Couche 1 : On colle le fond (la carte)
+    // Layer 1: Draw the map background
     mapCtx.putImageData(mapImageData, 0, 0)
 
-    // Couche 2 : On dessine le robot par dessus (Point Bleu)
+    // Layer 2: Draw the robot on top (Blue Point)
     const rx = parseFloat(odom.x)
     const ry = parseFloat(odom.y)
     const yawRobot = parseFloat(odom.yaw)
@@ -107,9 +124,33 @@ export function useMap() {
     mapCtx.strokeStyle = '#000000'
     mapCtx.lineWidth = 3
     mapCtx.stroke()
+
+    // Layer 4: Draw the Goal if it exists (Red Target)
+    if (activeGoal) {
+      const g = worldToCanvas(activeGoal.x, activeGoal.y)
+      
+      // Giant cross for debugging
+      mapCtx.beginPath()
+      mapCtx.moveTo(g.px - 20, g.py)
+      mapCtx.lineTo(g.px + 20, g.py)
+      mapCtx.moveTo(g.px, g.py - 20)
+      mapCtx.lineTo(g.px, g.py + 20)
+      mapCtx.strokeStyle = '#ef4444' // Red
+      mapCtx.lineWidth = 4
+      mapCtx.stroke()
+
+      // Central dot
+      mapCtx.beginPath()
+      mapCtx.arc(g.px, g.py, 8, 0, 2 * Math.PI)
+      mapCtx.fillStyle = '#ef4444' // Red
+      mapCtx.fill()
+      mapCtx.strokeStyle = '#ffffff' // White border
+      mapCtx.lineWidth = 3
+      mapCtx.stroke()
+    }
   }
 
-  // ----- Le Relais du Lidar (drawLidar) -----
+  // ----- Lidar Relayer (drawLidar) -----
   function drawLidar(msg) {
     currentScan = msg
   }
@@ -120,6 +161,9 @@ export function useMap() {
     mapCanvasRef,
     drawMap,
     worldToCanvas,
+    canvasToWorld,
+    setGoal,
+    clearGoal,
     renderCanvas,
     drawLidar
   }
