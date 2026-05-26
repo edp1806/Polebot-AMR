@@ -12,6 +12,8 @@ export const odom = ref({
   angular_speed: '0.00'
 })
 export const mapInfo = ref('Waiting for map...')
+export const proximityWarning = ref(false)
+export const minDetectedRange = ref(999.0)
 export const sensors = ref({
   lidar: 'WAITING',
   camera: 'WAITING',
@@ -20,6 +22,8 @@ export const sensors = ref({
 
 let ros = null
 let cmdVelTopic = null
+let goalTopic = null
+let cancelTopic = null
 let velInterval = null
 let connectTimeout = null
 
@@ -45,6 +49,14 @@ export function useRos() {
         name: '/cmd_vel',
         messageType: 'geometry_msgs/msg/Twist'
       })
+
+      // ---- PUBLISHER /goal_pose ----
+      goalTopic = new ROSLIB.Topic({
+        ros: ros,
+        name: '/goal_pose',
+        messageType: 'geometry_msgs/msg/PoseStamped'
+      })
+
 
       // ---- SUBSCRIPTION TO /odom ----
       const odomListener = new ROSLIB.Topic({
@@ -91,6 +103,28 @@ export function useRos() {
       })
       lidarListener.subscribe((message) => {
         drawLidar(message)
+        
+        // --- Proximity detection (<0.5m) ---
+        if (message && message.ranges && message.ranges.length > 0) {
+          let warning = false
+          let minR = 999.0
+          const rMin = message.range_min || 0.1
+          const rMax = message.range_max || 10.0
+          
+          for (let i = 0; i < message.ranges.length; i++) {
+            const r = message.ranges[i]
+            // Skip invalid/zero ranges
+            if (r > rMin && r < rMax && !isNaN(r)) {
+              if (r < minR) minR = r
+              if (r < 0.5) warning = true
+            }
+          }
+          proximityWarning.value = warning
+          minDetectedRange.value = minR
+        } else {
+          proximityWarning.value = false
+          minDetectedRange.value = 999.0
+        }
       })
 
       ros.on('error', () => {
@@ -173,34 +207,51 @@ export function useRos() {
     }, 100)
   }
 
-  // --- NAVIGATION (Nav2) ---
   function sendNavGoal(wx, wy) {
-    if (!ros) return
-    const goalTopic = new ROSLIB.Topic({
-      ros: ros,
-      name: '/goal_pose',
-      messageType: 'geometry_msgs/PoseStamped'
-    })
+    console.log("=== sendNavGoal ===");
+    console.log("wx:", wx, "wy:", wy);
+    console.log("goalTopic:", goalTopic);
+    console.log("connected.value:", connected.value);
+    
+    if (!goalTopic) {
+      console.error("goalTopic is not initialized! Trying to initialize it now...");
+      if (ros) {
+        goalTopic = new ROSLIB.Topic({
+          ros: ros,
+          name: '/goal_pose',
+          messageType: 'geometry_msgs/msg/PoseStamped'
+        });
+        console.log("goalTopic initialized dynamically:", goalTopic);
+      } else {
+        console.error("ros object is also null!");
+        return;
+      }
+    }
+    
     const goalMsg = {
-      header: { frame_id: 'map' },
+      header: { 
+        frame_id: 'map',
+        stamp: {
+          sec: 0,
+          nanosec: 0
+        }
+      },
       pose: {
         position: { x: wx, y: wy, z: 0.0 },
         orientation: { x: 0.0, y: 0.0, z: 0.0, w: 1.0 } // Facing forward by default
       }
     }
-    goalTopic.publish(goalMsg)
+    console.log("Publishing goalMsg (Zero Timestamp for sim time compatibility):", goalMsg);
+    try {
+      goalTopic.publish(goalMsg);
+      console.log("Successfully published to /goal_pose topic via ROSLIBJS");
+    } catch (e) {
+      console.error("Error publishing goal message:", e);
+    }
   }
 
   function cancelNavGoal() {
-    // Nav2 actions can be cancelled by publishing empty GoalID to /navigate_to_pose/_action/cancel
-    // Or simpler: publish zeros to /cmd_vel which we already do via stopVel()
-    // A more formal way is to send an empty cancel action goal.
-    if (!ros) return
-    const cancelTopic = new ROSLIB.Topic({
-      ros: ros,
-      name: '/navigate_to_pose/_action/cancel',
-      messageType: 'action_msgs/CancelGoalService'
-    })
+    if (!cancelTopic) return
     cancelTopic.publish({})
   }
 
@@ -250,6 +301,8 @@ export function useRos() {
     cancelNavGoal,
     sendExplorationEnable,
     saveMap,
-    clearMapSession
+    clearMapSession,
+    proximityWarning,
+    minDetectedRange
   }
 }

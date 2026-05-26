@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRos } from '../composables/useRos.js'
 import { useControl } from '../composables/useControl.js'
 import { useBattery } from '../composables/useBattery.js'
@@ -7,22 +7,65 @@ import { useInfluxDB } from '../composables/useInfluxDB.js'
 import { Point } from '@influxdata/influxdb-client'
 import { useMap } from '../composables/useMap.js'
 import { mapCanvasRef } from '../composables/useMap.js'
+import { useAudio } from '../composables/useAudio.js'
 
-const { odom, sensors, mapInfo, sendNavGoal, cancelNavGoal, sendExplorationEnable, saveMap, clearMapSession } = useRos()
+const { odom, sensors, mapInfo, sendNavGoal, cancelNavGoal, sendExplorationEnable, saveMap, clearMapSession, proximityWarning, minDetectedRange } = useRos()
 const { battery } = useBattery()
 const {
   isEStopActive, maxLinearSpeed, maxAngularSpeed, logs,
   robotState, getStateColor, getLogColor,
   startEStopPress, cancelEStopPress,
-  startVelGuarded, stopVel, addLog
+  startVelGuarded, stopVel, toggleEStop, addLog
 } = useControl()
 const { writeApi, selectedRobotId } = useInfluxDB()
 const { mapZoom, renderCanvas, canvasToWorld, setGoal, clearGoal } = useMap()
+const { playEstopAlarm, playProximityAlarm, initAudio } = useAudio()
+
+const isAudioMuted = ref(false)
 
 const mapCanvas = ref(null)
 
 const cameraTopic = ref('/depth_camera/rgb/image_raw')
 const hostIp = window.location.hostname || 'localhost'
+
+const screenAlert = ref(null) // {title,message,type}
+let lastProximityAlertTime = 0
+
+function triggerScreenAlert(title,message,type){
+  if ( type === 'proximity'){
+    const now = Date.now();
+    if(now - lastProximityAlertTime < 8000) return
+    lastProximityAlertTime = now
+  }
+  screenAlert.value = {title, message, type}
+  addLog(`🚨 [${type.toUpperCase()}] ${title}: ${message}`, type === 'estop' ? 'error' : 'warning')
+  setTimeout(() => {
+    if (screenAlert.value && screenAlert.value.title === title) {
+      screenAlert.value = null
+    }
+  }, 5000)
+}
+
+watch(isEStopActive, (newVal) => {
+  if(newVal){
+    triggerScreenAlert(
+      "ARRÊT D'URGENCE ACTIF",
+      "Le bouton arrêt d'urgence logiciel a été enclenché. Le robot est immobilisé.",
+      "estop"
+    )
+  }
+})
+
+watch(proximityWarning, (newVal) => {
+  if (newVal){
+    triggerScreenAlert(
+      "RISQUE DE COLLISION",
+      `Obstacle détecté très proche (${minDetectedRange.value.toFixed(2)}m). Ré duction de vitesse requise.`,
+      "proximity"
+    )
+  }
+}
+)
 
 // --- Mission Cycle Tracker ---
 const missionStartTime = ref(null)
@@ -64,6 +107,37 @@ function endMissionTracker() {
   missionCycleTime.value = '00:00'
 }
 
+// Handle click on SLAM map to trigger autonomous navigation 
+function handleMapClick(event){
+  const canvas = mapCanvas.value
+  if (!canvas) return
+  
+  //1. Get click coordinates relative to the canvas element bounds
+  const rect = canvas.getBoundingClientRect()
+
+  //Account for CSS transform scaling (zoom) and border offsets
+  const clickX = (event.clientX - rect.left) * (canvas.width / rect.width)
+  const clickY = (event.clientY - rect.top) * (canvas.height / rect.height)
+
+  //2. convert canvas pixel coordinates to real-world meters
+  const {wx, wy} = canvasToWorld(clickX, clickY)
+
+  //3. Set the target goal marker on the map canvas
+  setGoal(wx, wy)
+
+  //4. Publish Nav2 / goal_pose to ROS2 bridge
+  sendNavGoal(wx, wy)
+  
+  //5. Add a visual status log
+  addLog(`🎯 New autonomous mission: X=${wx.toFixed(2)}, Y=${wy.toFixed(2)}`, 'info')
+}
+
+function handleCancelGoal(){
+  clearGoal()
+  cancelNavGoal()
+  addLog("🎯 Cancel autonomous mission", "info")
+}
+
 // ----- THE GAME LOOP -----
 let isLoopRunning = false
 function startRenderLoop() {
@@ -72,18 +146,78 @@ function startRenderLoop() {
   }
   requestAnimationFrame(startRenderLoop)
 }
+
+let audioInterval = null
+
 onMounted(() => {
   mapCanvasRef.value = mapCanvas.value
   if (!isLoopRunning) {
     isLoopRunning = true
     requestAnimationFrame(startRenderLoop)
   }
+
+  // Synthesizer loops: plays alarms if active and not muted
+  audioInterval = setInterval(() => {
+    if (isAudioMuted.value) return
+    
+    if (isEStopActive.value) {
+      playEstopAlarm()
+    } else if (proximityWarning.value) {
+      playProximityAlarm()
+    }
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (audioInterval) clearInterval(audioInterval)
 })
 </script>
 
 <template>
-  <!-- 3. CONTROL TAB: MAIN GRID -->
-  <div class="main-grid">
+  <div class="live-control-container" @click="initAudio">
+    <!-- Visual HUD Screen Alert Overlay (Fermeture au clic ou après 5s) -->
+    <div v-if="screenAlert" class="hud-overlay" @click.stop="screenAlert = null">
+      <div class="hud-card" :class="{ 'estop-card': screenAlert.type === 'estop', 'proximity-card': screenAlert.type === 'proximity' }">
+        <div class="hud-header">
+          <span class="hud-icon">🚨</span>
+          <h2>{{ screenAlert.title }}</h2>
+        </div>
+        <div class="hud-body">
+          <p>{{ screenAlert.message }}</p>
+        </div>
+        <div class="hud-footer">
+          <span>Cliquez pour fermer ou attendez 5s...</span>
+        </div>
+        <!-- Barre de chargement qui rétrécit -->
+        <div class="progress-bar">
+          <div class="progress-fill"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Visual Alarm Banner Overlay -->
+    <div v-if="isEStopActive || proximityWarning" class="alarm-banner" :class="{ 'estop-alarm': isEStopActive, 'proximity-alarm': !isEStopActive }">
+      <div class="alarm-content">
+        <span class="alarm-icon">🚨</span>
+        <div class="alarm-text">
+          <span class="alarm-title">{{ isEStopActive ? "EMERGENCY STOP LOCKED" : "COLLISION WARNING" }}</span>
+          <span class="alarm-subtitle">
+            {{ isEStopActive ? "Software E-Stop engaged. Robot is immobilized." : `Obstacle detected at ${minDetectedRange.toFixed(2)}m! (Threshold: 0.50m)` }}
+          </span>
+        </div>
+      </div>
+      <div class="alarm-actions">
+        <button class="btn btn-mute" @click.stop="isAudioMuted = !isAudioMuted">
+          {{ isAudioMuted ? "🔇 Unmute Alarm" : "🔊 Mute Alarm" }}
+        </button>
+        <button v-if="isEStopActive" class="btn btn-resolve" @click.stop="toggleEStop">
+          🔧 Resolve E-Stop
+        </button>
+      </div>
+    </div>
+
+    <!-- 3. CONTROL TAB: MAIN GRID -->
+    <div class="main-grid">
     <!-- LEFT Column (Live data) -->
     <div class="col">
       <div class="card">
@@ -156,6 +290,24 @@ onMounted(() => {
         </div>
       </div>
 
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+        <div>
+          <h2 style="margin:0;">Live Map (SLAM)</h2>
+          <div style="font-size:10px; color:var(--text-muted);">
+            {{ mapInfo }}
+          </div>
+        </div>
+        <!-- Bouton d'annulation de but (Bonus 1) -->
+        <button 
+          @click="handleCancelGoal" 
+          class="btn" 
+          style="padding: 4px 8px; font-size: 10px; background: rgba(239, 68, 68, 0.2); border: 1px solid var(--accent-red); color: var(--accent-red);"
+        >
+          ❌ Cancel Goal
+        </button>
+      </div>
+
+
       <!-- LIVE CAMERA FEED -->
       <div class="card" style="margin-top: 15px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
@@ -194,15 +346,18 @@ onMounted(() => {
           <div style="flex:1; width:100%; border-radius:8px; background:var(--bg-secondary); overflow:hidden; position:relative;">
             <canvas 
               ref="mapCanvas"
+              @click="handleMapClick"
               :style="{
                 position: 'absolute',
                 left: '50%',
                 top: '50%',
                 transform: 'translate(-50%, -50%) scale(' + mapZoom + ')',
-                transformOrigin: 'center center'
+                transformOrigin: 'center center',
+                cursor: 'crosshair'
               }"
             ></canvas>
           </div>
+
           
           <div style="display:flex; gap:16px; margin-top:12px; font-size:11px; color:var(--text-muted); justify-content:center">
             <span>🔵 Robot</span>
@@ -301,4 +456,252 @@ onMounted(() => {
       </div>
     </div>
   </div>
+</div>
 </template>
+
+<style scoped>
+.live-control-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.alarm-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 16px 24px;
+  border-radius: 12px;
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  animation: pulse-border-estop 1.5s infinite alternate ease-in-out;
+  transition: all 0.3s ease;
+}
+
+.estop-alarm {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  animation-name: pulse-border-estop;
+}
+
+.proximity-alarm {
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  animation-name: pulse-border-proximity;
+}
+
+.alarm-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.alarm-icon {
+  font-size: 28px;
+  animation: shake 0.5s infinite;
+}
+
+.alarm-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.alarm-title {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+}
+
+.alarm-subtitle {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 2px;
+}
+
+.alarm-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-mute {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-mute:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.btn-resolve {
+  background: rgba(239, 68, 68, 0.6);
+  color: #fff;
+  border: 1px solid rgba(239, 68, 68, 0.8);
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-resolve:hover {
+  background: rgba(239, 68, 68, 0.8);
+}
+
+@keyframes pulse-border-estop {
+  0% {
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.3), 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  }
+  100% {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.65), 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  }
+}
+
+@keyframes pulse-border-proximity {
+  0% {
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.3), 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  }
+  100% {
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.65), 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  }
+}
+
+@keyframes shake {
+  0% { transform: translate(1px, 1px) rotate(0deg); }
+  10% { transform: translate(-1px, -2px) rotate(-1deg); }
+  20% { transform: translate(-3px, 0px) rotate(1deg); }
+  30% { transform: translate(0px, 2px) rotate(0deg); }
+  40% { transform: translate(1px, -1px) rotate(1deg); }
+  55% { transform: translate(-1px, 2px) rotate(-1deg); }
+  70% { transform: translate(-3px, 1px) rotate(0deg); }
+  85% { transform: translate(1px, 1px) rotate(-1deg); }
+  100% { transform: translate(1px, -2px) rotate(0deg); }
+}
+
+/* Fond flouté couvrant tout l'écran */
+.hud-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(10, 10, 15, 0.75);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 99999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  animation: fade-in 0.25s ease-out;
+}
+
+/* Carte centrale glassmorphism */
+.hud-card {
+  width: 460px;
+  background: rgba(23, 23, 35, 0.9);
+  border-radius: 16px;
+  padding: 32px;
+  text-align: center;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  position: relative;
+  overflow: hidden;
+  animation: scale-up 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.estop-card {
+  border-color: rgba(239, 68, 68, 0.6);
+  box-shadow: 0 0 40px rgba(239, 68, 68, 0.35), 0 24px 64px rgba(0, 0, 0, 0.7);
+}
+
+.proximity-card {
+  border-color: rgba(245, 158, 11, 0.6);
+  box-shadow: 0 0 40px rgba(245, 158, 11, 0.35), 0 24px 64px rgba(0, 0, 0, 0.7);
+}
+
+.hud-icon {
+  font-size: 52px;
+  display: block;
+  margin-bottom: 16px;
+  animation: bounce 0.6s infinite alternate ease-in-out;
+}
+
+.hud-card h2 {
+  font-size: 22px;
+  font-weight: 800;
+  margin-bottom: 16px;
+  color: #fff;
+  letter-spacing: 1px;
+}
+
+.hud-body p {
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+
+.hud-footer {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Barre de progression défilante (5 secondes) */
+.progress-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.progress-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--accent-red);
+  animation: shrink-bar 5s linear forwards;
+}
+
+.proximity-card .progress-fill {
+  background: var(--accent-yellow);
+}
+
+/* Animations */
+@keyframes shrink-bar {
+  from { width: 100%; }
+  to { width: 0%; }
+}
+
+@keyframes scale-up {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes bounce {
+  from { transform: translateY(0); }
+  to { transform: translateY(-8px); }
+}
+
+</style>
