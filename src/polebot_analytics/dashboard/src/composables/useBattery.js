@@ -8,6 +8,8 @@ const usageTime = ref(parseInt(localStorage.getItem('polebot_usage_time')) || 0)
 // Retrieve the session start date from the browser
 const sessionStartTime = ref(localStorage.getItem('polebot_session_start') || null)
 
+const lastSession = ref(null)
+
 
 
 export function useBattery() {
@@ -88,6 +90,16 @@ export function useBattery() {
     // Functions to reset battery and usage metrics
 
     function resetUsageTime() {
+        //Save last session info before clearing
+        if (usageTime.value > 0 && sessionStartTime.value) {
+            lastSession.value = {
+                startTime: new Date(sessionStartTime.value).toLocaleString(),
+                endTime: new Date().toLocaleString(),
+                duration: usageTime.value,
+                finalBattery: Math.round(battery.value)
+            }
+        }
+
         usageTime.value = 0
         localStorage.setItem('polebot_usage_time', 0)
         sessionStartTime.value = null
@@ -110,6 +122,7 @@ export function useBattery() {
         dischargeRate,
         estimatedAutonomy,
         sessionStartTime,
+        lastSession,
         updateBattery,
         resetBattery,
         resetUsageTime

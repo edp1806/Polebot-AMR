@@ -163,8 +163,8 @@ setInterval(() => {
 
       <!-- VIEWS -->
       <LiveControl v-show="activeTab === 'control'" />
-      <AnalyticsHistory v-if="activeTab === 'analytics'" />
-      <KpiDashboard v-if="activeTab === 'kpi'" />
+      <AnalyticsHistory v-show="activeTab === 'analytics'" />
+      <KpiDashboard v-show="activeTab === 'kpi'" />
 
     </main>
   </div>

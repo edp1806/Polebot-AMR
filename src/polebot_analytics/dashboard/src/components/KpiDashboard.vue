@@ -3,9 +3,11 @@
 import { useBattery } from '../composables/useBattery.js'
 import { useInfluxDB } from '../composables/useInfluxDB.js'
 import { onMounted, ref, computed} from 'vue'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
-const { battery, dischargeRate, estimatedAutonomy, formattedUsageTime } = useBattery()
-const { averageCycleTime, cycleTimeHistory, fetchCycleTimes, movementEfficiency, stabilityIndex, sessionHistory, fetchRobotSessions } = useInfluxDB()
+const { battery, dischargeRate, estimatedAutonomy, formattedUsageTime, lastSession } = useBattery()
+const { averageCycleTime, cycleTimeHistory, fetchCycleTimes, movementEfficiency, stabilityIndex, sessionHistory, fetchRobotSessions, changeTimeRange } = useInfluxDB()
 
 // Utility function to format duration (converts seconds to h m s)
 function formatDuration(seconds) {
@@ -55,6 +57,134 @@ const filteredSessions = computed(() => {
     })
 })
 
+// Export filtered sessions as a downloadable CSV file
+function exportCSV() {
+    const header = 'Start Time, End Time, Duration \n'
+    const rows = filteredSessions.value.map(s => 
+        `"${s.startTime}", "${s.endTime}", ${s.duration}`
+    ).join('\n')
+
+    const blob = new Blob([header + rows], { type: 'text/csv'})
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `polebot_sessions_${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+}
+
+//Generate a professional PDF report with KPI summary and session table
+async function exportPDF(){
+    const doc = new jsPDF()
+
+    // --- Header ---
+    doc.setFontSize(20)
+    doc.setTextColor(30, 41, 59)
+    doc.text('Polebot AMR - Performance Report', 14, 22)
+
+    doc.setFontSize(10)
+    doc.setTextColor(100, 116, 139)
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 30)
+
+    // --- KPI SUmmary ---
+    doc.setFontSize(14)
+    doc.setTextColor(30,41,59)
+    doc.text('KPI Summary', 14, 45)
+
+    autoTable(doc, {
+        startY: 50,
+        head: [['Metric', 'Value']],
+        body: [
+            ['Battery Level', `${Math.round(battery.value)}%`],
+            ['Discharge Rate', `${dischargeRate.value.toFixed(2)}%/min`],
+            ['Estimated Autonomy', `${estimatedAutonomy.value}`],
+            ['Usage Time', `${formattedUsageTime.value}`],
+            ['Average Cycle Time', `${averageCycleTime.value}`],
+            ['Movement Efficiency', `${movementEfficiency.value}%`],
+            ['Stability Index', `${stabilityIndex.value}%`],
+        ],
+        theme: 'grid',
+        headStyles: {fillColor: [59, 130, 246,]}
+    })
+
+    // --- Session History Table ---
+    doc.setFontSize(14)
+    doc.text('Connection Sessions History', 14, doc.lastAutoTable.finalY + 15)
+    autoTable(doc, {
+        startY: doc.lastAutoTable.finalY + 20,
+        head: [['Start Time', 'End Time', 'Duration']],
+        body: filteredSessions.value.map(s => [
+            s.startTime,
+            s.endTime,
+            formatDuration(s.duration)
+        ]),
+        theme: 'striped',
+        headStyles: {fillColor: [59, 130, 246]},
+    })
+
+    // --- CHArts Section ---
+    // Temporarily reveal the hidden Analytics tab so canvases can render
+    const batteryCanvas = document.getElementById('batteryChart')
+    let hiddenParent = null
+    if(batteryCanvas){
+        let el = batteryCanvas.parentElement
+        while(el){
+            if(el.style.display === 'none'){
+                hiddenParent = el
+                break
+            }
+            el = el.parentElement
+        }
+    }
+    if(hiddenParent) hiddenParent.style.display = ''
+
+    // Force 1h range and wait for chart.js to redraw
+    changeTimeRange('-1h')
+    await new Promise(resolve => setTimeout(resolve, 1000))
+
+    doc.addPage()
+    doc.setFontSize(16)
+    doc.setTextColor(30, 41, 59)
+    doc.text('Charts - Last Hour', 14, 20)
+
+    const chartIds = ['batteryChart', 'speedChart', 'trajectoryChart', 'positionChart']
+    const chartNames = ['Battery Level', 'Speed (Linear & Angular)','Trajectory (X/Y)', 'Position over Time']
+    let yPosition = 30
+
+    chartIds.forEach((id, i) => {
+        const canvas = document.getElementById(id)
+        if(canvas && canvas.width > 0 && canvas.height > 0){
+            doc.setFontSize(11)
+            doc.setTextColor(100, 116, 139)
+            doc.text(chartNames[i], 14, yPosition)
+            yPosition += 3
+
+            const tempCanvas = document.createElement('canvas')
+            tempCanvas.width = canvas.width
+            tempCanvas.height = canvas.height
+            const tempCtx = tempCanvas.getContext('2d')
+            tempCtx.fillStyle = '#ffffff'
+            tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height)
+            tempCtx.drawImage(canvas, 0, 0)
+
+            const imgData = tempCanvas.toDataURL('image/jpeg', 1.0)
+            doc.addImage(imgData, 'JPEG', 14, yPosition, 180, 50)
+            yPosition += 58
+
+            if(yPosition > 240 && i < chartIds.length - 1) {
+                doc.addPage()
+                yPosition = 20
+            }
+        }
+    })
+
+    // Restore hidden State
+    if(hiddenParent) hiddenParent.style.display = 'none'
+
+    // --- Save PDF ---
+    doc.save(`polebot_report_${new Date().toISOString().slice(0, 10)}.pdf`)    
+}
+
 onMounted(() => {
   fetchRobotSessions()
   fetchCycleTimes()
@@ -65,6 +195,17 @@ onMounted(() => {
 <template>
     <div style="padding: 20px; overflow-y: auto; height: calc(100vh - 65px); box-sizing: border-box;">
         <h2>📊 Performance Indicators (KPI)</h2>
+        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+            <button @click="exportCSV" style="border: 1px solid #cbd5e1; background: white; color: #1e293b; padding:
+            8px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s;"
+            onmouseover="this.style.background='#f1f5f9'"
+            onmouseout="this.style.background='white'">
+            📥 Export CSV
+        </button>
+        <button @click="exportPDF" style="border: 1px solid #cbd5e1; background: white; color: #1e293b; padding: 8px 16px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='white'">
+            📋 Export PDF
+        </button>
+        </div>
         <!-- Section BATTERY -->
         <h3>🔋 Battery Usage</h3>
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
@@ -90,6 +231,30 @@ onMounted(() => {
                 <div class="kpi-value">{{ formattedUsageTime }}</div>
             </div>
         </div>
+
+        <!-- LAST SESSION SUMMARY -->
+        <div v-if="lastSession" style="margin-top: 20px; background: linear-gradient(135deg, #eff6ff, #f0fdf4); border: 1px solid #bfdbfe; border-radius: 8px; padding: 20px 25px;">
+            <h3 style="margin: 0 0 15px 0; color: #1e40af;">📋 Last Session Summary</h3>
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
+                <div style="text-align: center;">
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Start Time</div>
+                    <div style="font-size: 14px; font-weight: 700; color: #1e293b; margin-top: 4px;">{{ lastSession.startTime }}</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">End Time</div>
+                    <div style="font-size: 14px; font-weight: 700; color: #1e293b; margin-top: 4px;">{{ lastSession.endTime }}</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Duration</div>
+                    <div style="font-size: 14px; font-weight: 700; color: #1e40af; margin-top: 4px;">{{ formatDuration(lastSession.duration) }}</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Final Battery</div>
+                    <div style="font-size: 14px; font-weight: 700; color: #10b981; margin-top: 4px;">{{ lastSession.finalBattery }}%</div>
+                </div>
+            </div>
+        </div>
+
         
         <!-- CYCLE TIME SECTION -->
         <h3 style="margin-top: 30px;">⏱️ Mission Performance</h3>
