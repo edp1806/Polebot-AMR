@@ -4,12 +4,12 @@ import { ref } from 'vue'
 export const mapZoom = ref(1)
 export const showLidar = ref(true)
 export const mapCanvasRef = ref(null) // Shared with LiveControl.vue (template ref)
+export const activeGoal = ref(null) // Selected destination
+export let currentScan = null
 
 let mapCtx = null
 let mapData = null
 let mapImageData = null
-let activeGoal = null // Selected destination
-export let currentScan = null
 
 // ---- EXPERT SOLUTION: Web Worker for the Map ----
 // Create a dynamic Worker to calculate the map image in the background (without blocking the UI)
@@ -41,7 +41,7 @@ self.onmessage = function(e) {
 const mapWorkerBlob = new Blob([mapWorkerCode], { type: 'application/javascript' });
 const mapWorker = new Worker(URL.createObjectURL(mapWorkerBlob));
 
-mapWorker.onmessage = function(e) {
+mapWorker.onmessage = function (e) {
   const { pixelData, width, height } = e.data;
   mapImageData = new ImageData(pixelData, width, height);
 };
@@ -81,11 +81,11 @@ export function useMap() {
   }
 
   function setGoal(wx, wy) {
-    activeGoal = { x: wx, y: wy }
+    activeGoal.value = { x: wx, y: wy }
   }
 
   function clearGoal() {
-    activeGoal = null
+    activeGoal.value = null
   }
 
   // ----- The Graphical Conductor (renderCanvas) -----
@@ -126,9 +126,9 @@ export function useMap() {
     mapCtx.stroke()
 
     // Layer 4: Draw the Goal if it exists (Red Target)
-    if (activeGoal) {
-      const g = worldToCanvas(activeGoal.x, activeGoal.y)
-      
+    if (activeGoal.value) {
+      const g = worldToCanvas(activeGoal.value.x, activeGoal.value.y)
+
       // Giant cross for debugging
       mapCtx.beginPath()
       mapCtx.moveTo(g.px - 20, g.py)
@@ -164,6 +164,7 @@ export function useMap() {
     canvasToWorld,
     setGoal,
     clearGoal,
+    activeGoal,
     renderCanvas,
     drawLidar
   }

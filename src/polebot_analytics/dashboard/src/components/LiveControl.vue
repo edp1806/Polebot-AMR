@@ -1,12 +1,11 @@
 <script setup>
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { useRos } from '../composables/useRos.js'
 import { useControl } from '../composables/useControl.js'
 import { useBattery } from '../composables/useBattery.js'
 import { useInfluxDB } from '../composables/useInfluxDB.js'
 import { Point } from '@influxdata/influxdb-client'
-import { useMap } from '../composables/useMap.js'
-import { mapCanvasRef } from '../composables/useMap.js'
+import { useMap, activeGoal, mapCanvasRef } from '../composables/useMap.js'
 import { useAudio } from '../composables/useAudio.js'
 
 const { odom, sensors, mapInfo, sendNavGoal, cancelNavGoal, sendExplorationEnable, saveMap, clearMapSession, proximityWarning, minDetectedRange } = useRos()
@@ -22,6 +21,24 @@ const { mapZoom, renderCanvas, canvasToWorld, setGoal, clearGoal } = useMap()
 const { playEstopAlarm, playProximityAlarm, initAudio } = useAudio()
 
 const isAudioMuted = ref(false)
+const isLidarEquipped = ref(true) // Physical robot configuration: set to false for versions without Lidar
+
+const distanceToGoal = computed(() => {
+  if(!activeGoal.value) return null
+  const rx = parseFloat(odom.value.x)
+  const ry = parseFloat(odom.value.y)
+  const dx = activeGoal.value.x - rx
+  const dy = activeGoal.value.y - ry
+  return Math.sqrt(dx*dx + dy*dy)
+})
+
+const linearSpeedPercent = computed(() => {
+  return Math.min(100, (Math.abs(parseFloat(odom.value.linear_speed)) / maxLinearSpeed.value) * 100)
+})
+const angularSpeedPercent = computed(() => {
+  return Math.min(100, (Math.abs(parseFloat(odom.value.angular_speed)) / maxAngularSpeed.value) * 100)
+})
+
 
 const mapCanvas = ref(null)
 
@@ -49,23 +66,22 @@ function triggerScreenAlert(title,message,type){
 watch(isEStopActive, (newVal) => {
   if(newVal){
     triggerScreenAlert(
-      "ARRÊT D'URGENCE ACTIF",
-      "Le bouton arrêt d'urgence logiciel a été enclenché. Le robot est immobilisé.",
+      "EMERGENCY STOP ACTIVE",
+      "Software emergency stop engaged. Robot is immobilized.",
       "estop"
     )
   }
 })
 
 watch(proximityWarning, (newVal) => {
-  if (newVal){
+  if (newVal && isLidarEquipped.value){
     triggerScreenAlert(
-      "RISQUE DE COLLISION",
-      `Obstacle détecté très proche (${minDetectedRange.value.toFixed(2)}m). Ré duction de vitesse requise.`,
+      "COLLISION WARNING",
+      `Obstacle detected very close (${minDetectedRange.value.toFixed(2)}m). Speed reduction required.`,
       "proximity"
     )
   }
-}
-)
+})
 
 // --- Mission Cycle Tracker ---
 const missionStartTime = ref(null)
@@ -135,8 +151,14 @@ function handleMapClick(event){
 function handleCancelGoal(){
   clearGoal()
   cancelNavGoal()
-  addLog("🎯 Cancel autonomous mission", "info")
+  // Déclencher le HUD bleu pour l'annulation de mission
+  triggerScreenAlert(
+    "MISSION INTERROMPUE",
+    "La navigation autonome a été annulée. La cible et la trajectoire du robot ont été réinitialisées.",
+    "cancel"
+  )
 }
+
 
 // ----- THE GAME LOOP -----
 let isLoopRunning = false
@@ -162,7 +184,7 @@ onMounted(() => {
     
     if (isEStopActive.value) {
       playEstopAlarm()
-    } else if (proximityWarning.value) {
+    } else if (proximityWarning.value && isLidarEquipped.value) {
       playProximityAlarm()
     }
   }, 1000)
@@ -177,7 +199,7 @@ onUnmounted(() => {
   <div class="live-control-container" @click="initAudio">
     <!-- Visual HUD Screen Alert Overlay (Fermeture au clic ou après 5s) -->
     <div v-if="screenAlert" class="hud-overlay" @click.stop="screenAlert = null">
-      <div class="hud-card" :class="{ 'estop-card': screenAlert.type === 'estop', 'proximity-card': screenAlert.type === 'proximity' }">
+      <div class="hud-card" :class="{ 'estop-card': screenAlert.type === 'estop', 'proximity-card': screenAlert.type === 'proximity', 'cancel-card': screenAlert.type === 'cancel' }">
         <div class="hud-header">
           <span class="hud-icon">🚨</span>
           <h2>{{ screenAlert.title }}</h2>
@@ -196,7 +218,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Visual Alarm Banner Overlay -->
-    <div v-if="isEStopActive || proximityWarning" class="alarm-banner" :class="{ 'estop-alarm': isEStopActive, 'proximity-alarm': !isEStopActive }">
+    <div v-if="isEStopActive || (proximityWarning && isLidarEquipped)" class="alarm-banner" :class="{ 'estop-alarm': isEStopActive, 'proximity-alarm': !isEStopActive }">
       <div class="alarm-content">
         <span class="alarm-icon">🚨</span>
         <div class="alarm-text">
@@ -246,6 +268,53 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- BONUS 3: DYNAMIC NAVIGATION METRICS -->
+      <div class="card nav-metrics-card">
+        <h2>📍 Navigation Metrics</h2>
+
+        <!-- Distance to Goal -->
+        <div v-if="distanceToGoal !== null" class="metric-row">
+          <span class="metric-label">Remaining Distance</span>
+          <span class="metric-value" :style="{ color: distanceToGoal < 0.5 ? 'var(--accent-green)' : 'var(--accent-blue)' }">
+            {{ distanceToGoal.toFixed(2) }} m
+          </span>
+        </div>
+        <div v-else class="metric-row">
+          <span class="metric-label">Remaining Distance</span>
+          <span class="metric-value" style="color: var(--text-muted)">No target</span>
+        </div>
+
+        <!-- Linear Speed Gauge -->
+        <div class="gauge-block">
+          <div class="gauge-header">
+            <span class="metric-label">Linear Speed</span>
+            <span class="metric-value">{{ odom.linear_speed }} m/s</span>
+          </div>
+          <div class="gauge-bar-bg">
+            <div class="gauge-bar-fill linear-fill" :style="{ width: linearSpeedPercent + '%' }"></div>
+          </div>
+        </div>
+
+        <!-- Angular Speed Gauge -->
+        <div class="gauge-block">
+          <div class="gauge-header">
+            <span class="metric-label">Angular Speed</span>
+            <span class="metric-value">{{ odom.angular_speed }} rad/s</span>
+          </div>
+          <div class="gauge-bar-bg">
+            <div class="gauge-bar-fill angular-fill" :style="{ width: angularSpeedPercent + '%' }"></div>
+          </div>
+        </div>
+
+        <!-- Closest Obstacle -->
+        <div v-if="isLidarEquipped" class="metric-row" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-color);">
+          <span class="metric-label">🛡️ Nearest Obstacle</span>
+          <span class="metric-value" :style="{ color: minDetectedRange < 0.5 ? 'var(--accent-red)' : minDetectedRange < 1.0 ? 'var(--accent-yellow)' : 'var(--accent-green)' }">
+            {{ minDetectedRange < 100 ? minDetectedRange.toFixed(2) + ' m' : '—' }}
+          </span>
+        </div>
+      </div>
+
       <!-- CARD: SYSTEM STATUS -->
       <div class="card">
         <h2>System Status</h2>
@@ -258,14 +327,18 @@ onUnmounted(() => {
 
         <div style="display:flex; flex-direction: column; gap:8px; font-size:12px;">
           <!-- LIDAR -->
-          <div style="display:flex; justify-content:space-between;">
-            <span style="color:var(--text-muted)">LIDAR</span>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="display:flex; align-items:center; gap:6px;">
+              <input type="checkbox" v-model="isLidarEquipped" style="cursor:pointer; width:12px; height:12px; margin:0;" title="Toggle LIDAR Equipment Status">
+              <span style="color:var(--text-muted)">LIDAR</span>
+            </div>
             <span :style="{
-              color: sensors.lidar === 'OK' ? 'var(--accent-green)' :
+              color: !isLidarEquipped ? 'var(--text-secondary)' :
+                     sensors.lidar === 'OK' ? 'var(--accent-green)' :
                      sensors.lidar === 'WARN' ? 'var(--accent-yellow)' :
                      (sensors.lidar === 'ERROR' || sensors.lidar === 'STALE') ? 'var(--accent-red)' :
                      'var(--text-secondary)'
-            }">{{ sensors.lidar }}</span>
+            }">{{ isLidarEquipped ? sensors.lidar : 'N/A' }}</span>
           </div>
           <!-- CAMERA -->
           <div style="display:flex; justify-content:space-between;">
@@ -290,21 +363,23 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
-        <div>
-          <h2 style="margin:0;">Live Map (SLAM)</h2>
-          <div style="font-size:10px; color:var(--text-muted);">
-            {{ mapInfo }}
+      <!-- CARD: LIVE MAP STATUS & CANCEL GOAL -->
+      <div class="card map-control-card" style="margin-top: 5px; margin-bottom: 5px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h2 style="margin:0;">Live Map (SLAM)</h2>
+            <div style="font-size:10.5px; color:var(--text-muted); margin-top: 4px; font-family: monospace;">
+              {{ mapInfo }}
+            </div>
           </div>
+          <!-- Bouton d'annulation de but (Bonus 1) -->
+          <button 
+            @click="handleCancelGoal" 
+            class="btn map-cancel-btn"
+          >
+            ❌ Cancel Goal
+          </button>
         </div>
-        <!-- Bouton d'annulation de but (Bonus 1) -->
-        <button 
-          @click="handleCancelGoal" 
-          class="btn" 
-          style="padding: 4px 8px; font-size: 10px; background: rgba(239, 68, 68, 0.2); border: 1px solid var(--accent-red); color: var(--accent-red);"
-        >
-          ❌ Cancel Goal
-        </button>
       </div>
 
 
@@ -681,6 +756,103 @@ onUnmounted(() => {
 
 .proximity-card .progress-fill {
   background: var(--accent-yellow);
+}
+
+/* À insérer dans ta balise <style scoped> (par exemple sous les règles .proximity-card) */
+
+.cancel-card {
+  border-color: rgba(59, 130, 246, 0.6); /* Bordure bleue */
+  box-shadow: 0 0 40px rgba(59, 130, 246, 0.35), 0 24px 64px rgba(0, 0, 0, 0.7); /* Lueur bleue */
+}
+
+.cancel-card .progress-fill {
+  background: var(--accent-blue); /* Barre de chargement bleue */
+}
+
+/* Encadré identique aux autres cartes de la colonne */
+.map-control-card {
+  border: 1px solid var(--border-color) !important;
+  background: var(--bg-card) !important;
+  box-shadow: none !important;
+}
+
+/* Bouton bleu identique aux accents de la colonne */
+.map-cancel-btn {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: bold;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  color: var(--accent-blue);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.map-cancel-btn:hover {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+  transform: translateY(-1px);
+}
+
+.map-cancel-btn:active {
+  transform: translateY(0);
+}
+
+/* Bonus 3: Navigation Metrics Panel */
+.nav-metrics-card {
+  border-left: 4px solid var(--accent-blue) !important;
+}
+
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.metric-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.metric-value {
+  font-size: 14px;
+  font-family: monospace;
+  font-weight: 700;
+  color: var(--accent-blue);
+}
+
+.gauge-block {
+  margin-bottom: 10px;
+}
+
+.gauge-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.gauge-bar-bg {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.gauge-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.linear-fill {
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+}
+
+.angular-fill {
+  background: linear-gradient(90deg, var(--accent-yellow), #f97316);
 }
 
 /* Animations */
