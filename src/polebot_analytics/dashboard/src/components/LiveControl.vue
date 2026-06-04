@@ -7,6 +7,7 @@ import { useInfluxDB } from '../composables/useInfluxDB.js'
 import { Point } from '@influxdata/influxdb-client'
 import { useMap, activeGoal, mapCanvasRef } from '../composables/useMap.js'
 import { useAudio } from '../composables/useAudio.js'
+import { useBlackBox } from '../composables/useBlackBox.js'
 
 const { odom, sensors, mapInfo, sendNavGoal, cancelNavGoal, sendExplorationEnable, saveMap, clearMapSession, proximityWarning, minDetectedRange } = useRos()
 const { battery } = useBattery()
@@ -19,8 +20,10 @@ const {
 const { writeApi, selectedRobotId } = useInfluxDB()
 const { mapZoom, renderCanvas, canvasToWorld, setGoal, clearGoal } = useMap()
 const { playEstopAlarm, playProximityAlarm, initAudio } = useAudio()
+const { blackBoxLogs, addIncident, clearBlackBox, exportBlackBoxAsJSON } = useBlackBox()
 
 const isAudioMuted = ref(false)
+const logTab = ref('system')
 const isLidarEquipped = ref(true) // Physical robot configuration: set to false for versions without Lidar
 
 const distanceToGoal = computed(() => {
@@ -146,11 +149,13 @@ function handleMapClick(event){
   
   //5. Add a visual status log
   addLog(`🎯 New autonomous mission: X=${wx.toFixed(2)}, Y=${wy.toFixed(2)}`, 'info')
+  addIncident('Info', 'Goal Dispatched', `New navigation target set to X=${wx.toFixed(2)}, Y=${wy.toFixed(2)}`)
 }
 
 function handleCancelGoal(){
   clearGoal()
   cancelNavGoal()
+  addIncident('Warning', 'Goal Cancelled', 'Navigation mission cancelled by operator.')
   // Déclencher le HUD bleu pour l'annulation de mission
   triggerScreenAlert(
     "MISSION INTERROMPUE",
@@ -517,16 +522,65 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="card">
-          <h2>Logs</h2>
-          <div style="display:flex; flex-direction:column; gap:8px; max-height:200px;
-          overflow-y:auto; padding-right:12px;">
-            <div v-for="(log, index) in logs"
-            :key="log.time + index"
-            :style="{color: getLogColor(log.type)}">
-            <span style="color:var(--text-muted)">[{{ log.time }}]</span>
-            {{ log.message }}
+      <div class="card" style="position: relative;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+          <div style="display: flex; gap: 15px;">
+            <span 
+              @click="logTab = 'system'" 
+              :style="{ cursor: 'pointer', fontWeight: '600', fontSize: '13px', borderBottom: logTab === 'system' ? '2px solid var(--accent-blue)' : 'none', color: logTab === 'system' ? '#fff' : 'var(--text-muted)', paddingBottom: '4px' }"
+            >
+              System Logs
+            </span>
+            <span 
+              @click="logTab = 'blackbox'" 
+              :style="{ cursor: 'pointer', fontWeight: '600', fontSize: '13px', borderBottom: logTab === 'blackbox' ? '2px solid var(--accent-red)' : 'none', color: logTab === 'blackbox' ? '#fff' : 'var(--text-muted)', paddingBottom: '4px' }"
+            >
+              ⬛ Black Box
+            </span>
+          </div>
+          
+          <!-- Actions for Black Box -->
+          <div v-if="logTab === 'blackbox'" style="display: flex; gap: 8px;">
+            <button @click="exportBlackBoxAsJSON" class="btn" style="padding: 2px 8px; font-size: 10px; background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); color: var(--accent-blue); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
+              📥 Export
+            </button>
+            <button @click="clearBlackBox" class="btn" style="padding: 2px 8px; font-size: 10px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--accent-red); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
+              🗑️ Clear
+            </button>
+          </div>
+        </div>
+
+        <!-- System Logs Tab -->
+        <div v-if="logTab === 'system'" style="display:flex; flex-direction:column; gap:8px; max-height:180px; overflow-y:auto; padding-right:12px;">
+          <div v-for="(log, index) in logs" :key="log.time + index" :style="{color: getLogColor(log.type)}">
+            <span style="color:var(--text-muted)">[{{ log.time }}]</span> {{ log.message }}
+          </div>
+        </div>
+
+        <!-- Black Box Tab -->
+        <div v-else style="display:flex; flex-direction:column; gap:8px; max-height:180px; overflow-y:auto; padding-right:12px;">
+          <div v-if="blackBoxLogs.length === 0" style="text-align: center; color: var(--text-muted); font-size: 12px; padding: 20px 0;">
+            No critical incidents recorded.
+          </div>
+          <div v-for="incident in blackBoxLogs" :key="incident.id" style="font-size: 11px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; gap: 3px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span :style="{
+                color: incident.severity === 'Critical' ? '#ef4444' : incident.severity === 'Warning' ? '#f59e0b' : '#10b981',
+                fontWeight: '700',
+                textTransform: 'uppercase',
+                fontSize: '8px',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                background: incident.severity === 'Critical' ? 'rgba(239,68,68,0.12)' : incident.severity === 'Warning' ? 'rgba(245,158,11,0.12)' : 'rgba(16,185,129,0.12)',
+                border: incident.severity === 'Critical' ? '1px solid rgba(239,68,68,0.2)' : incident.severity === 'Warning' ? '1px solid rgba(245,158,11,0.2)' : '1px solid rgba(16,185,129,0.2)'
+              }">
+                {{ incident.severity }}
+              </span>
+              <span style="color: var(--text-muted); font-size: 9px;">{{ incident.timestamp }}</span>
             </div>
+            <div style="color: #fff; font-weight: 600; font-size: 11px; margin-top: 2px;">{{ incident.type }}</div>
+            <div style="color: var(--text-muted); font-size: 10.5px; line-height: 1.3;">{{ incident.description }}</div>
+          </div>
         </div>
       </div>
     </div>

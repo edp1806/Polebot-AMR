@@ -9,10 +9,11 @@ import { Point } from '@influxdata/influxdb-client'
 import KpiDashboard from './components/KpiDashboard.vue'
 import LiveControl from './components/LiveControl.vue'
 import AnalyticsHistory from './components/AnalyticsHistory.vue'
+import SensorDiagnostics  from './components/SensorDiagnostics.vue'
 
 // --- Singleton composables ---
 const { battery, usageTime, sessionStartTime, resetUsageTime, updateBattery } = useBattery()
-const { connected, connecting, odom, connectRos: _connectRos, disconnectRos: _disconnectRos } = useRos()
+const { connected, connecting, odom, connectRos: _connectRos, disconnectRos: _disconnectRos, connectionPing, isLowBandwidthMode } = useRos()
 const { isEStopActive, stopVel, addLog } = useControl()
 const { selectedRobotId, openAnalytics, writeApi, saveSessionToInflux } = useInfluxDB()
 const { currentScan, drawMap, drawLidar } = useMap()
@@ -121,6 +122,10 @@ setInterval(() => {
         <button @click="activeTab = 'kpi'" class="sidebar-item" :class="{ 'active': activeTab === 'kpi' }">
           <span style="font-size: 16px;">📊</span> KPI Dashboard
         </button>
+
+        <button @click="activeTab = 'diagnostics'" class="sidebar-item" :class="{ 'active': activeTab === 'diagnostics' }">
+          <span style="font-size: 16px;">🩺</span> Diagnostics
+        </button>
       </nav>
 
       <!-- Fleet Selector -->
@@ -145,12 +150,24 @@ setInterval(() => {
       <!-- TOP HEADER -->
       <header style="height: 65px; min-height: 65px; padding: 0 25px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); background: var(--bg-header); box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
         <div style="font-size: 18px; font-weight: 600; color: #fff; display: flex; align-items: center; gap: 10px;">
-          {{ activeTab === 'control' ? 'Live Teleoperation' : activeTab === 'analytics' ? 'Analytics & Data Historian' : 'KPI Dashboard' }}
+          {{ activeTab === 'control' ? 'Live Teleoperation' : activeTab === 'analytics' ? 'Analytics & Data Historian' : activeTab === 'kpi' ? 'KPI Dashboard' : 'System Diagnostics' }}
           <span style="color:var(--text-muted); font-size:14px; font-weight:400;">/ {{ selectedRobotId }}</span>
         </div>
 
         <div style="display: flex; align-items: center; gap: 15px;">
           <input v-model="wsUrl" placeholder="ws://localhost:9090" :disabled="connected" style="background:var(--bg-secondary); border:1px solid var(--border-color); color:#fff; padding:6px 12px; border-radius:6px; font-size:12px; width:180px;" />
+          
+          <!-- Latency & Bandwidth Badges (Bonus A) -->
+          <div v-if="connected && connectionPing !== null" style="display: flex; align-items: center; gap: 8px;">
+            <span class="badge" :class="connectionPing < 30 ? 'badge-green' : connectionPing < 100 ? 'badge-yellow' : 'badge-red'" style="padding: 6px 12px; font-size: 11px;">
+              📶 {{ connectionPing }} ms
+            </span>
+            
+            <span v-if="isLowBandwidthMode" class="badge pulse" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 6px 12px; font-size: 11px; font-weight: 600; border-radius: 6px;" title="SLAM Map rendering is throttled to preserve network performance">
+              ⚠️ Low Bandwidth
+            </span>
+          </div>
+
           <span class="badge" :class="connected ? 'badge-green pulse' : 'badge-red'" style="padding: 6px 12px; font-size:11px;">
             {{ connected ? '● ROS2 Connected' : '● ROS2 Offline' }}
           </span>
@@ -165,6 +182,7 @@ setInterval(() => {
       <LiveControl v-show="activeTab === 'control'" />
       <AnalyticsHistory v-show="activeTab === 'analytics'" />
       <KpiDashboard v-show="activeTab === 'kpi'" />
+      <SensorDiagnostics v-show="activeTab === 'diagnostics'" />
 
     </main>
   </div>

@@ -20,12 +20,24 @@ export const sensors = ref({
   map: 'WAITING'
 })
 
+export const connectionPing = ref(null)
+export const isLowBandwidthMode = ref(false)
+
+//Statistiques des topics en temps réel
+export const topicRates = ref({
+  odom: { name: '/odom', type: 'nav_msgs/Odometry', hz: 0, count: 0, status: 'OFFLINE', lastTime: null },
+  scan: { name: '/scan', type: 'sensor_msgs/LaserScan', hz: 0, count: 0, status: 'OFFLINE', lastTime: null },
+  map: { name: '/map', type: 'nav_msgs/OccupancyGrid', hz: 0, count: 0, status: 'OFFLINE', lastTime: null }
+})
+
 let ros = null
 let cmdVelTopic = null
 let goalTopic = null
 let cancelTopic = null
 let velInterval = null
 let connectTimeout = null
+let pingInterval = null
+let mapCounter = 0
 
 export function useRos() {
 
@@ -41,6 +53,35 @@ export function useRos() {
         connected.value = true
         connecting.value = false
         addLog('Connected to ROSBridge!', 'success')
+
+        pingInterval = setInterval(() => {
+          if (!connected.value || !ros) return
+          console.log("[Ping] Tentative d'appel au service de paramètres...");
+          const start = performance.now()
+
+          const paramService = new ROSLIB.Service({
+            ros: ros,
+            name: '/rosbridge_websocket/get_parameters',
+            serviceType: 'rcl_interfaces/srv/GetParameters'
+          })
+
+          const request = {
+            names: ['port']
+          }
+
+          paramService.callService(request, (res) => {
+            const end = performance.now()
+            const latency = Math.round(end - start)
+            connectionPing.value = latency
+            console.log(`[Ping] Succès ! Latence mesurée : ${latency} ms. Mode basse bande passante: ${latency >= 150}`);
+
+            // Auto low-bandwidth mode if ping is high (>= 150ms)
+            isLowBandwidthMode.value = (latency >= 150)
+          }, (err) => {
+            console.warn("[Ping] Échec de l'appel du service. Erreur :", err);
+            connectionPing.value = null
+          })
+        }, 3000)
       })
 
       // ---- PUBLISHER /cmd_vel ----
@@ -67,6 +108,8 @@ export function useRos() {
       odomListener.subscribe((message) => {
         odom.value.linear_speed = message.twist.twist.linear.x.toFixed(2)
         odom.value.angular_speed = message.twist.twist.angular.z.toFixed(2)
+        topicRates.value.odom.count++
+        topicRates.value.odom.lastTime = Date.now()
       })
 
       // ---- SUBSCRIPTION TO /robot_pose ----
@@ -92,6 +135,13 @@ export function useRos() {
       })
       mapListener.subscribe((message) => {
         mapInfo.value = `Size: ${message.info.width}x${message.info.height} (Resolution: ${message.info.resolution.toFixed(3)}m/px)`
+        topicRates.value.map.count++
+        topicRates.value.map.lastTime = Date.now()
+        if (isLowBandwidthMode.value) {
+          mapCounter++
+          // Draw only 1 out of every 5 map messages under low bandwidth
+          if (mapCounter % 5 !== 0) return
+        }
         drawMap(message)
       })
 
@@ -103,14 +153,16 @@ export function useRos() {
       })
       lidarListener.subscribe((message) => {
         drawLidar(message)
-        
+
         // --- Proximity detection (<0.5m) ---
         if (message && message.ranges && message.ranges.length > 0) {
           let warning = false
           let minR = 999.0
+          topicRates.value.scan.count++
+          topicRates.value.scan.lastTime = Date.now()
           const rMin = message.range_min || 0.1
           const rMax = message.range_max || 10.0
-          
+
           for (let i = 0; i < message.ranges.length; i++) {
             const r = message.ranges[i]
             // Skip invalid/zero ranges
@@ -122,6 +174,8 @@ export function useRos() {
           proximityWarning.value = warning
           minDetectedRange.value = minR
         } else {
+          topicRates.value.scan.count++
+          topicRates.value.scan.lastTime = Date.now()
           proximityWarning.value = false
           minDetectedRange.value = 999.0
         }
@@ -167,16 +221,59 @@ export function useRos() {
         }
       })
     })
+
+    //Calcul des Hz toutes les secondes
+    ratesInterval = setInterval(() => {
+      const now = Date.now()
+      Object.keys(topicRates.value).forEach((key) => {
+        const topic = topicRates.value[key]
+        if (!connected.value) {
+          topic.hz = 0
+          topic.status = 'OFFLINE'
+          topic.count = 0
+          return
+        }
+        topic.hz = topic.count // Les Hz correspondent au nombre de msgs reçus durant la dernière seconde
+        topic.count = 0 // On remet à zéro pour la seconde suivante
+        // Évaluation du statut
+        if (topic.lastTime && (now - topic.lastTime < 3000)) {
+          topic.status = topic.hz > 0 ? 'OK' : 'STALE'
+        } else {
+          topic.status = 'ERROR' // Aucun message depuis plus de 3 secondes
+        }
+      })
+    }, 1000)
   }
+
 
   // ----- Disconnect -----
   function disconnectRos(addLog) {
+    if (pingInterval) {
+      clearInterval(pingInterval)
+      pingInterval = null
+    }
+    connectionPing.value = null
+    isLowBandwidthMode.value = false
+    mapCounter = 0
+
     if (ros) ros.close()
     if (velInterval) clearInterval(velInterval)
     if (connectTimeout) clearTimeout(connectTimeout)
     connected.value = false
     connecting.value = false
     addLog("Manual disconnect completed.", "info")
+
+    if (ratesInterval) {
+      clearInterval(ratesInterval)
+      ratesInterval = null
+    }
+    //Remettre à zéro les valeurs
+    Object.keys(topicRates.value).forEach(key => {
+      topicRates.value[key].hz = 0
+      topicRates.value[key].status = 'OFFLINE'
+      topicRates.value[key].count = 0
+      topicRates.value[key].lastTime = null
+    })
   }
 
   // ----- Manual Control -----
@@ -212,7 +309,7 @@ export function useRos() {
     console.log("wx:", wx, "wy:", wy);
     console.log("goalTopic:", goalTopic);
     console.log("connected.value:", connected.value);
-    
+
     if (!goalTopic) {
       console.error("goalTopic is not initialized! Trying to initialize it now...");
       if (ros) {
@@ -227,9 +324,9 @@ export function useRos() {
         return;
       }
     }
-    
+
     const goalMsg = {
-      header: { 
+      header: {
         frame_id: 'map',
         stamp: {
           sec: 0,
@@ -251,8 +348,33 @@ export function useRos() {
   }
 
   function cancelNavGoal() {
-    if (!cancelTopic) return
-    cancelTopic.publish({})
+    if (!ros || !connected.value) return
+
+    // 1. Fallback robuste : Publier la position odométrique actuelle comme destination pour arrêter immédiatement le robot
+    const rx = parseFloat(odom.value.x)
+    const ry = parseFloat(odom.value.y)
+    if (!isNaN(rx) && !isNaN(ry)) {
+      sendNavGoal(rx, ry)
+    }
+
+    // 2. Action ROS 2 standard : Appeler le service d'annulation avec un UUID vide pour annuler tous les buts actifs
+    const request = {
+      goal_info: {
+        goal_id: {
+          uuid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        }
+      }
+    }
+    const client = new ROSLIB.Service({
+      ros: ros,
+      name: '/navigate_to_pose/_action/cancel',
+      serviceType: 'action_msgs/srv/CancelGoal'
+    })
+    client.callService(request, (result) => {
+      console.log('Action ROS2 annulée avec succès. Résultat:', result)
+    }, (error) => {
+      console.warn('Service d\'annulation d\'action non disponible (silencieux si hors Nav2) :', error)
+    })
   }
 
   function sendExplorationEnable(enable) {
@@ -303,6 +425,9 @@ export function useRos() {
     saveMap,
     clearMapSession,
     proximityWarning,
-    minDetectedRange
+    minDetectedRange,
+    connectionPing,
+    isLowBandwidthMode,
+    topicRates
   }
 }
