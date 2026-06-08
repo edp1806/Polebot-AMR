@@ -120,6 +120,28 @@ function getStatusBadgeClass(status){
           </div>
 
       </div>
+      <!-- Journal des alarmes de sécurité -->
+       <div class="card" style="margin-top: 10px;">
+        <h2 style="margin-top: 0; margin-bottom: 15px; font-size: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;
+        color: var(--accent-red); display: flex; align-items: center; gap: 8px;">
+          ⚠️ Recent Critical Safety Events
+        </h2>
 
+        <div v-if="blackBoxLogs.filter(log => log.severity === 'Critical').length === 0" style="text-align: center; color: var(--text-muted);
+        font-size: 13px; padding: 20px 0;">✅ No critical safety events in memory.</div>
+
+        <div v-else style="display: flex; flex-direction: column; gap: 8px; max-height: 150px; overflow-y: auto; padding-right: 5px;">
+          <div v-for="incident in blackBoxLogs.filter(log => log.severity === 'Critical').slice(0, 5)"
+            :key="incident.id"
+            style="font-size: 12px; display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: rgba(239, 68, 68, 0.05);
+            border-left: 4px solid var(--accent-red); border-radius: 4px;">
+            <div>
+              <span style="font-weight: 700; color: #fff; margin-right: 10px; text-transform: uppercase;">{{ incident.type }}</span>
+              <span style="color: var(--text-muted);">{{ incident.description }}</span>
+            </div>
+            <span style="font-size: 11px; color: var(--text-secondary);">{{ incident.timestamp }}</span>
+          </div>
+        </div>
+      </div>
   </div>
 </template>

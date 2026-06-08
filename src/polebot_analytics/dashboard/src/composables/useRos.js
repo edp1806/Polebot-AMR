@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import * as ROSLIB from 'roslib'
 
 // --- Singleton state (shared across all components) ---
@@ -30,6 +30,8 @@ export const topicRates = ref({
   map: { name: '/map', type: 'nav_msgs/OccupancyGrid', hz: 0, count: 0, status: 'OFFLINE', lastTime: null }
 })
 
+export const isDemoMode = ref(false)
+
 let ros = null
 let cmdVelTopic = null
 let goalTopic = null
@@ -38,6 +40,71 @@ let velInterval = null
 let connectTimeout = null
 let pingInterval = null
 let mapCounter = 0
+let demoInterval = null
+let demoTime = 0
+
+watch(isDemoMode, (newVal) => {
+  if (newVal) {
+    //Activer le mode démo
+    connected.value = true
+    connecting.value = false
+    connectionPing.value = 12
+    console.log('💻 Demo Mode activated! Simulating robot telemetry.')
+
+    //Activer les status des noeuds
+    sensors.value.lidar = 'OK'
+    sensors.value.camera = 'OK'
+    sensors.value.map = 'OK'
+
+    demoInterval = setInterval(() => {
+      demoTime += 0.05
+
+      //simuler une trajectoire en cercle (X et Y tournent)
+      const radius = 2.5
+      const x = radius * Math.cos(demoTime)
+      const y = radius * Math.sin(demoTime)
+      const yaw = (demoTime % (2 * Math.PI)) - Math.PI
+
+      odom.value.x = x.toFixed(2)
+      odom.value.y = y.toFixed(2)
+      odom.value.yaw = yaw.toFixed(2)
+      odom.value.linear_speed = '0.35'
+      odom.value.angular_speed = '0.15'
+
+      //Simuler des fréquences stables pour la page de diagnostics
+      topicRates.value.odom.hz = 50
+      topicRates.value.odom.status = 'OK'
+
+      topicRates.value.scan.hz = 10
+      topicRates.value.scan.status = 'OK'
+
+      topicRates.value.map.hz = 1
+      topicRates.value.map.status = 'OK'
+
+      //Fluctuation réaliste de la latence
+      connectionPing.value = Math.round(12 + Math.random() * 5)
+    }, 100)
+
+  } else {
+    //Désactiver le mode démo
+    if (demoInterval) {
+      clearInterval(demoInterval)
+      demoInterval = null
+    }
+    connected.value = false
+    connectionPing.value = null
+    odom.value = { x: '0.00', y: '0.00', yaw: '0.00', linear_speed: '0.00', angular_speed: '0.00' }
+
+    //Remettre à zéro les diagnostics
+    Object.keys(topicRates.value).forEach(key => {
+      topicRates.value[key].hz = 0
+      topicRates.value[key].status = 'OFFLINE'
+    })
+
+    console.log('💻 Demo Mode disabled.')
+
+  }
+})
 
 export function useRos() {
 
@@ -428,6 +495,7 @@ export function useRos() {
     minDetectedRange,
     connectionPing,
     isLowBandwidthMode,
-    topicRates
+    topicRates,
+    isDemoMode
   }
 }
