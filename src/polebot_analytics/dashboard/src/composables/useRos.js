@@ -23,7 +23,7 @@ export const sensors = ref({
 export const connectionPing = ref(null)
 export const isLowBandwidthMode = ref(false)
 
-//Statistiques des topics en temps réel
+// Real-time topic statistics
 export const topicRates = ref({
   odom: { name: '/odom', type: 'nav_msgs/Odometry', hz: 0, count: 0, status: 'OFFLINE', lastTime: null },
   scan: { name: '/scan', type: 'sensor_msgs/LaserScan', hz: 0, count: 0, status: 'OFFLINE', lastTime: null },
@@ -45,7 +45,7 @@ let demoTime = 0
 
 watch(isDemoMode, (newVal) => {
   if (newVal) {
-    //Activer le mode démo
+    // Enable demo mode
     connected.value = true
     connecting.value = false
     connectionPing.value = 12
@@ -71,7 +71,7 @@ watch(isDemoMode, (newVal) => {
       odom.value.linear_speed = '0.35'
       odom.value.angular_speed = '0.15'
 
-      //Simuler des fréquences stables pour la page de diagnostics
+      // Simulate stable frequencies for diagnostics page
       topicRates.value.odom.hz = 50
       topicRates.value.odom.status = 'OK'
 
@@ -81,12 +81,12 @@ watch(isDemoMode, (newVal) => {
       topicRates.value.map.hz = 1
       topicRates.value.map.status = 'OK'
 
-      //Fluctuation réaliste de la latence
+      // Realistic latency fluctuation
       connectionPing.value = Math.round(12 + Math.random() * 5)
     }, 100)
 
   } else {
-    //Désactiver le mode démo
+    // Disable demo mode
     if (demoInterval) {
       clearInterval(demoInterval)
       demoInterval = null
@@ -95,7 +95,7 @@ watch(isDemoMode, (newVal) => {
     connectionPing.value = null
     odom.value = { x: '0.00', y: '0.00', yaw: '0.00', linear_speed: '0.00', angular_speed: '0.00' }
 
-    //Remettre à zéro les diagnostics
+    // Reset diagnostics
     Object.keys(topicRates.value).forEach(key => {
       topicRates.value[key].hz = 0
       topicRates.value[key].status = 'OFFLINE'
@@ -123,7 +123,7 @@ export function useRos() {
 
         pingInterval = setInterval(() => {
           if (!connected.value || !ros) return
-          console.log("[Ping] Tentative d'appel au service de paramètres...");
+          console.log("[Ping] Attempting to call parameter service...");
           const start = performance.now()
 
           const paramService = new ROSLIB.Service({
@@ -140,12 +140,12 @@ export function useRos() {
             const end = performance.now()
             const latency = Math.round(end - start)
             connectionPing.value = latency
-            console.log(`[Ping] Succès ! Latence mesurée : ${latency} ms. Mode basse bande passante: ${latency >= 150}`);
+            console.log(`[Ping] Success! Latency measured: ${latency} ms. Low bandwidth mode: ${latency >= 150}`);
 
             // Auto low-bandwidth mode if ping is high (>= 150ms)
             isLowBandwidthMode.value = (latency >= 150)
           }, (err) => {
-            console.warn("[Ping] Échec de l'appel du service. Erreur :", err);
+            console.warn("[Ping] Failed to call service. Error:", err);
             connectionPing.value = null
           })
         }, 3000)
@@ -300,9 +300,9 @@ export function useRos() {
           topic.count = 0
           return
         }
-        topic.hz = topic.count // Les Hz correspondent au nombre de msgs reçus durant la dernière seconde
-        topic.count = 0 // On remet à zéro pour la seconde suivante
-        // Évaluation du statut
+        topic.hz = topic.count // Hz matches the number of msgs received in the last second
+        topic.count = 0 // Reset for the next second
+        // Status evaluation
         if (topic.lastTime && (now - topic.lastTime < 3000)) {
           topic.status = topic.hz > 0 ? 'OK' : 'STALE'
         } else {
@@ -334,7 +334,7 @@ export function useRos() {
       clearInterval(ratesInterval)
       ratesInterval = null
     }
-    //Remettre à zéro les valeurs
+    // Reset values
     Object.keys(topicRates.value).forEach(key => {
       topicRates.value[key].hz = 0
       topicRates.value[key].status = 'OFFLINE'
@@ -344,6 +344,15 @@ export function useRos() {
   }
 
   // ----- Manual Control -----
+  function publishVel(linear, angular) {
+    if (!cmdVelTopic || !connected.value) return
+    const twist = {
+      linear: { x: linear, y: 0.0, z: 0.0 },
+      angular: { x: 0.0, y: 0.0, z: angular }
+    }
+    cmdVelTopic.publish(twist)
+  }
+
   function startVel(linear, angular, isEStopActive) {
     if (!cmdVelTopic || !connected.value) return
     if (velInterval) clearInterval(velInterval)
@@ -417,7 +426,7 @@ export function useRos() {
   function cancelNavGoal() {
     if (!ros || !connected.value) return
 
-    // 1. Fallback robuste : Publier la position odométrique actuelle comme destination pour arrêter immédiatement le robot
+    // 1. Robust fallback: Publish current odometry position as destination to immediately stop the robot
     const rx = parseFloat(odom.value.x)
     const ry = parseFloat(odom.value.y)
     if (!isNaN(rx) && !isNaN(ry)) {
@@ -438,7 +447,7 @@ export function useRos() {
       serviceType: 'action_msgs/srv/CancelGoal'
     })
     client.callService(request, (result) => {
-      console.log('Action ROS2 annulée avec succès. Résultat:', result)
+      console.log('ROS2 action cancelled successfully. Result:', result)
     }, (error) => {
       console.warn('Service d\'annulation d\'action non disponible (silencieux si hors Nav2) :', error)
     })
@@ -486,6 +495,7 @@ export function useRos() {
     disconnectRos,
     startVel,
     stopVel,
+    publishVel,
     sendNavGoal,
     cancelNavGoal,
     sendExplorationEnable,

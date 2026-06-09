@@ -15,7 +15,7 @@ const {
 const { battery } = useBattery()
 const { addLog } = useControl()
 
-// Watcher : quand on clique pour agrandir un graphique
+// Watcher: when clicking to expand a chart
 watch(expandedChart, (chartType) => {
   if (!chartType) {
     destroyExpandedChart()
@@ -24,10 +24,10 @@ watch(expandedChart, (chartType) => {
   setTimeout(() => drawExpandedChart(chartType), 100)
 })
 
-// Watcher : filtres de vitesse
+// Watcher: speed filters
 watch([showLinearSpeedLine, showAngularSpeedLine], () => updateSpeedChartVisibility())
 
-// Watcher : filtres de position
+// Watcher: position filters
 watch([showPosXLine, showPosYLine], () => updatePositionChartVisibility())
 
 function handleReset() {
@@ -39,7 +39,7 @@ function handleReset() {
 <template>
   <div v-if="true" style="padding: 15px; flex: 1; display: flex; flex-direction: column; overflow: auto;">
     
-    <!-- Barre d'outils globale -->
+    <!-- Global toolbar -->
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
       <div style="display:flex; gap:15px; align-items:center;">
         <h2 style="margin:0;">📊 InfluxDB History (Full Session)</h2>
@@ -59,7 +59,7 @@ function handleReset() {
       </div>
     </div>
 
-    <!-- Grille 2x2 des graphiques -->
+    <!-- 2x2 Charts grid -->
     <div style="display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); grid-template-rows: 1fr 1fr; gap:12px; flex:1;">
       
       <!-- 1. Battery -->
@@ -100,7 +100,7 @@ function handleReset() {
         </div>
       </div>
 
-      <!-- 3. Trajectoire X/Y -->
+      <!-- 3. Trajectory X/Y -->
       <div class="card chart-card" @click="expandedChart = 'trajectory'" style="display:flex; flex-direction:column; cursor:pointer;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <h3 style="margin:0; font-size:13px;">🗺️ Trajectory (X/Y)</h3>
@@ -116,7 +116,7 @@ function handleReset() {
         </div>
       </div>
 
-      <!-- 4. Position au fil du temps -->
+      <!-- 4. Position over time -->
       <div class="card chart-card" @click="expandedChart = 'position'" style="display:flex; flex-direction:column; cursor:pointer;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <h3 style="margin:0; font-size:13px;">📍 Position (Time)</h3>
@@ -139,14 +139,14 @@ function handleReset() {
       </div>
     </div>
 
-    <!-- MODAL : Graphique agrandi (plein écran) -->
+    <!-- MODAL: Expanded chart (fullscreen) -->
     <div v-if="expandedChart" 
       @click="expandedChart = null"
       style="position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.85); z-index:1000; display:flex; align-items:center; justify-content:center; padding:40px;">
       <div class="card" @click.stop style="width:90vw; height:85vh; display:flex; flex-direction:column;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
           <h2 style="margin:0;">
-            {{ expandedChart === 'battery' ? '🔋 Battery' : expandedChart === 'speed' ? '⚡ Speeds' : expandedChart === 'trajectory' ? '🗺️ Trajectoire' : '📍 Position' }}
+            {{ expandedChart === 'battery' ? '🔋 Battery' : expandedChart === 'speed' ? '⚡ Speeds' : expandedChart === 'trajectory' ? '🗺️ Trajectory' : '📍 Position' }}
           </h2>
           <div style="display:flex; gap:10px; align-items:center;">
             <div v-if="expandedChart === 'speed'" style="display:flex; gap:10px;">

@@ -12,7 +12,7 @@ const influxBucket = 'polebot_data'
 export const influxDB = new InfluxDB({ url: influxURL, token: influxToken })
 export const writeApi = influxDB.getWriteApi(influxOrg, influxBucket, 'ms')
 
-// --- État singleton ---
+// --- Singleton state ---
 export const selectedRobotId = ref('polebot_01')
 export const selectedTimeRange = ref('-5m')
 export const expandedChart = ref(null)
@@ -116,12 +116,12 @@ export function useInfluxDB() {
 
         // --- CALCUL DES NOUVEAUX KPIs ---
         // --- CALCUL DU MOVEMENT EFFICIENCY ---
-        // 1. On nettoie les données pour ignorer les valeurs "nulles" (pertes de connexion)
+        // 1. Clean data to ignore "null" values (connection drops)
         const validLinear = linearSpeedData.filter(v => v !== null)
-        // 2. On compte combien de fois le robot était réellement en mouvement.
-        // On considère qu'il bouge si sa vitesse dépasse 0.02 m/s (pour ignorer le bruit des capteurs à l'arrêt)
+        // 2. Count how many times the robot was actually moving.
+        // Consider moving if speed exceeds 0.02 m/s (ignore sensor noise when idle)
         const movingSamples = validLinear.filter(v => Math.abs(v) > 0.02).length
-        // 3. On calcule le pourcentage d'efficacité (Temps actif / Temps total * 100)
+        // 3. Calculate efficiency percentage (Active time / Total time * 100)
         movementEfficiency.value = validLinear.length > 0 ? Math.round((movingSamples / validLinear.length) * 100) : 0
 
 
@@ -129,7 +129,7 @@ export function useInfluxDB() {
         for (let i = 1; i < validLinear.length; i++) {
           if (Math.abs(validLinear[i] - validLinear[i - 1]) > 0.15) jerkCount++
         }
-        stabilityIndex.value = Math.max(0, 100 - (jerkCount * 2)) // Pénalité de 2% par à-coup
+        stabilityIndex.value = Math.max(0, 100 - (jerkCount * 2)) // 2% penalty per jerk
         // --------------------------------
 
         const ctxBat = document.getElementById('batteryChart')
@@ -189,13 +189,13 @@ export function useInfluxDB() {
     })
   }
 
-  function openAnalytics(activeTab) {
-    activeTab.value = 'analytics'
+  function openAnalytics() {
     setTimeout(() => fetchAndDrawChart(), 200)
 
     if (analyticsRefreshInterval) clearInterval(analyticsRefreshInterval)
     analyticsRefreshInterval = setInterval(() => {
-      if (activeTab.value === 'analytics') {
+      // Refresh stopped if canvas disappears
+      if (document.getElementById('batteryChartCanvas')) {
         fetchAndDrawChart()
       } else {
         clearInterval(analyticsRefreshInterval)
@@ -284,7 +284,7 @@ export function useInfluxDB() {
 
   function changeTimeRange(range) {
     selectedTimeRange.value = range
-    chartStartTime = null // Ignore le précédent Reset pour voir le passé
+    chartStartTime = null // Ignore previous Reset to see the past
     localStorage.removeItem('chartStartTime')
     fetchAndDrawChart()
   }
@@ -294,7 +294,7 @@ export function useInfluxDB() {
     const canvas = document.getElementById(canvasId)
     if (!canvas) return
     const link = document.createElement('a')
-    link.download = 'Historique_Polebot.png'
+    link.download = 'Polebot_History.png'
     link.href = canvas.toDataURL('image/png')
     link.click()
   }
@@ -309,7 +309,7 @@ export function useInfluxDB() {
     chartStartTime = new Date()
     localStorage.setItem('chartStartTime', chartStartTime.toISOString())
     battery.value = 100
-    addLog('Graphiques réinitialisés !', 'info')
+    addLog('Charts reset!', 'info')
 
     const resetTimeLabel = chartStartTime.toLocaleTimeString()
     setTimeout(() => {

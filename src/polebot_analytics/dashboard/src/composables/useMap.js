@@ -26,7 +26,7 @@ self.onmessage = function(e) {
       
       if (value === -1) { // Unknown (Dark gray)
         pixelData[pixelIndex] = 15; pixelData[pixelIndex+1] = 22; pixelData[pixelIndex+2] = 41; pixelData[pixelIndex+3] = 255;
-      } else if (value === 0) { // Empty (Gris très clair)
+      } else if (value === 0) { // Empty (Very light gray)
         pixelData[pixelIndex] = 220; pixelData[pixelIndex+1] = 220; pixelData[pixelIndex+2] = 225; pixelData[pixelIndex+3] = 255;
       } else { // Wall / Obstacle (Bright red)
         pixelData[pixelIndex] = 239; pixelData[pixelIndex+1] = 68; pixelData[pixelIndex+2] = 68; pixelData[pixelIndex+3] = 255;

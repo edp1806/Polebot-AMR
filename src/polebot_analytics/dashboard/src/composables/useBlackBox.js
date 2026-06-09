@@ -7,6 +7,13 @@ import { useBattery } from './useBattery.js'
 // Singleton state
 export const blackBoxLogs = ref(JSON.parse(localStorage.getItem('polebot_blackbox_logs') || '[]'))
 
+// Multi-tab synchronization (updates the dashboard if modified from /teleop)
+window.addEventListener('storage', (e) => {
+  if (e.key === 'polebot_blackbox_logs' && e.newValue) {
+    blackBoxLogs.value = JSON.parse(e.newValue)
+  }
+})
+
 let initialized = false
 
 export function useBlackBox() {

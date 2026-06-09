@@ -15,7 +15,7 @@ const {
   isEStopActive, maxLinearSpeed, maxAngularSpeed, logs,
   robotState, getStateColor, getLogColor,
   startEStopPress, cancelEStopPress,
-  startVelGuarded, stopVel, toggleEStop, addLog
+  toggleEStop, addLog
 } = useControl()
 const { writeApi, selectedRobotId } = useInfluxDB()
 const { mapZoom, renderCanvas, canvasToWorld, setGoal, clearGoal } = useMap()
@@ -158,8 +158,8 @@ function handleCancelGoal(){
   addIncident('Warning', 'Goal Cancelled', 'Navigation mission cancelled by operator.')
   // Déclencher le HUD bleu pour l'annulation de mission
   triggerScreenAlert(
-    "MISSION INTERROMPUE",
-    "La navigation autonome a été annulée. La cible et la trajectoire du robot ont été réinitialisées.",
+    "MISSION CANCELLED",
+    "Autonomous navigation cancelled. Target and trajectory reset.",
     "cancel"
   )
 }
@@ -213,7 +213,7 @@ onUnmounted(() => {
           <p>{{ screenAlert.message }}</p>
         </div>
         <div class="hud-footer">
-          <span>Cliquez pour fermer ou attendez 5s...</span>
+          <span>Click to close or wait 5s...</span>
         </div>
         <!-- Barre de chargement qui rétrécit -->
         <div class="progress-bar">
@@ -388,20 +388,7 @@ onUnmounted(() => {
       </div>
 
 
-      <!-- LIVE CAMERA FEED -->
-      <div class="card" style="margin-top: 15px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-          <h2 style="margin:0;">📷 Live Camera</h2>
-          <input type="text" v-model="cameraTopic" placeholder="/depth_camera/rgb/image_raw" style="width: 170px; font-size: 10px; padding: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px;">
-        </div>
-        <div style="background: #000; border-radius: 6px; overflow: hidden; min-height: 160px; display: flex; align-items: center; justify-content: center; position: relative;">
-          <div style="color: var(--text-muted); font-size: 11px; position: absolute; text-align: center; padding: 10px;">
-            Waiting for camera feed...<br>
-            <code style="font-size: 9px;">ros2 run web_video_server web_video_server</code>
-          </div>
-          <img :src="`http://${hostIp}:8080/stream?topic=${cameraTopic}`" style="width: 100%; position: relative; z-index: 1; display: none;" onload="this.style.display='block'" onerror="this.style.display='none'" />
-        </div>
-      </div>
+
     </div>
 
     <!-- CENTER COLUMN (The Map) -->
@@ -422,7 +409,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Canvas de la carte avec zoom -->
+          <!-- Map Canvas with zoom -->
           <div style="flex:1; width:100%; border-radius:8px; background:var(--bg-secondary); overflow:hidden; position:relative;">
             <canvas 
               ref="mapCanvas"
@@ -472,8 +459,9 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Manual Control -->
-      <div class="card">
+      <!-- Safety Control (E-Stop Only) -->
+      <div class="card" style="border-color: var(--accent-red);">
+        <h2>Safety Controls</h2>
         <button 
           @mousedown="startEStopPress" 
           @mouseup="cancelEStopPress" 
@@ -483,106 +471,35 @@ onUnmounted(() => {
           class="btn" 
           :style="{ 
             width: '100%', 
-            marginBottom: '15px', 
-            padding: '12px', 
+            padding: '16px', 
             fontWeight: 'bold',
+            fontSize: '14px',
             background: isEStopActive ? 'var(--accent-red)' : 'rgba(239,68,68,0.15)',
             color: isEStopActive ? '#fff' : 'var(--accent-red)',
-            border: '2px solid var(--accent-red)'
+            border: '2px solid var(--accent-red)',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            boxShadow: isEStopActive ? '0 0 15px rgba(239, 68, 68, 0.4)' : 'none'
           }">
           {{ isEStopActive ? "⚠️ EMERGENCY STOP LOCKED" : "🛑 HOLD 1s FOR EMERGENCY STOP" }}
         </button>
-        <h2>Manual Control</h2>
-        <div class="ctrl-grid">
-          <div></div>
-          <button class="ctrl-btn" @mousedown.prevent="startVelGuarded(maxLinearSpeed, 0)" @touchstart.prevent="startVelGuarded(maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▲</button>
-          <div></div>
-          <button class="ctrl-btn" @mousedown.prevent="startVelGuarded(0, maxAngularSpeed)" @touchstart.prevent="startVelGuarded(0, maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">◀</button>
-          <button class="ctrl-btn ctrl-stop" @mousedown.prevent="stopVel" @touchstart.prevent="stopVel">⏹</button>
-          <button class="ctrl-btn" @mousedown.prevent="startVelGuarded(0, -maxAngularSpeed)" @touchstart.prevent="startVelGuarded(0, -maxAngularSpeed)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▶</button>
-          <div></div>
-          <button class="ctrl-btn" @mousedown.prevent="startVelGuarded(-maxLinearSpeed, 0)" @touchstart.prevent="startVelGuarded(-maxLinearSpeed, 0)" @mouseup="stopVel" @mouseleave="stopVel" @touchend="stopVel">▼</button>
-          <div></div>
-        </div>
+      </div>
 
-        <div style="text-align:center; font-size:11px; color:var(--text-muted); margin-top:8px">
-          Press and hold to steer
+      <!-- LIVE CAMERA FEED -->
+      <div class="card" style="margin-top: 15px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h2 style="margin:0;">📷 Live Camera</h2>
+          <input type="text" v-model="cameraTopic" placeholder="/depth_camera/rgb/image_raw" style="width: 170px; font-size: 10px; padding: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px;">
         </div>
-
-        <div style="margin-bottom: 15px; font-size: 12px; color: var(--text-muted);">
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-            <span>Max Speed (Linear): {{ maxLinearSpeed }} m/s</span>
+        <div style="background: #000; border-radius: 6px; overflow: hidden; min-height: 160px; display: flex; align-items: center; justify-content: center; position: relative;">
+          <div style="color: var(--text-muted); font-size: 11px; position: absolute; text-align: center; padding: 10px;">
+            Waiting for camera feed...<br>
+            <code style="font-size: 9px;">ros2 run web_video_server web_video_server</code>
           </div>
-          <input type="range" min="0.1" max="1.5" step="0.1" v-model.number="maxLinearSpeed" style="width:100%;">
-          
-          <div style="display:flex; justify-content:space-between; margin-bottom:5px; margin-top:10px;">
-            <span>Max Speed (Angular): {{ maxAngularSpeed }} rad/s</span>
-          </div>
-          <input type="range" min="0.1" max="1.5" step="0.1" v-model.number="maxAngularSpeed" style="width:100%;">
+          <img :src="`http://${hostIp}:8080/stream?topic=${cameraTopic}`" style="width: 100%; position: relative; z-index: 1; display: none;" onload="this.style.display='block'" onerror="this.style.display='none'" />
         </div>
       </div>
 
-      <div class="card" style="position: relative;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
-          <div style="display: flex; gap: 15px;">
-            <span 
-              @click="logTab = 'system'" 
-              :style="{ cursor: 'pointer', fontWeight: '600', fontSize: '13px', borderBottom: logTab === 'system' ? '2px solid var(--accent-blue)' : 'none', color: logTab === 'system' ? '#fff' : 'var(--text-muted)', paddingBottom: '4px' }"
-            >
-              System Logs
-            </span>
-            <span 
-              @click="logTab = 'blackbox'" 
-              :style="{ cursor: 'pointer', fontWeight: '600', fontSize: '13px', borderBottom: logTab === 'blackbox' ? '2px solid var(--accent-red)' : 'none', color: logTab === 'blackbox' ? '#fff' : 'var(--text-muted)', paddingBottom: '4px' }"
-            >
-              ⬛ Black Box
-            </span>
-          </div>
-          
-          <!-- Actions for Black Box -->
-          <div v-if="logTab === 'blackbox'" style="display: flex; gap: 8px;">
-            <button @click="exportBlackBoxAsJSON" class="btn" style="padding: 2px 8px; font-size: 10px; background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); color: var(--accent-blue); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
-              📥 Export
-            </button>
-            <button @click="clearBlackBox" class="btn" style="padding: 2px 8px; font-size: 10px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--accent-red); border-radius: 4px; cursor: pointer; transition: all 0.2s;">
-              🗑️ Clear
-            </button>
-          </div>
-        </div>
-
-        <!-- System Logs Tab -->
-        <div v-if="logTab === 'system'" style="display:flex; flex-direction:column; gap:8px; max-height:180px; overflow-y:auto; padding-right:12px;">
-          <div v-for="(log, index) in logs" :key="log.time + index" :style="{color: getLogColor(log.type)}">
-            <span style="color:var(--text-muted)">[{{ log.time }}]</span> {{ log.message }}
-          </div>
-        </div>
-
-        <!-- Black Box Tab -->
-        <div v-else style="display:flex; flex-direction:column; gap:8px; max-height:180px; overflow-y:auto; padding-right:12px;">
-          <div v-if="blackBoxLogs.length === 0" style="text-align: center; color: var(--text-muted); font-size: 12px; padding: 20px 0;">
-            No critical incidents recorded.
-          </div>
-          <div v-for="incident in blackBoxLogs" :key="incident.id" style="font-size: 11px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; gap: 3px;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span :style="{
-                color: incident.severity === 'Critical' ? '#ef4444' : incident.severity === 'Warning' ? '#f59e0b' : '#10b981',
-                fontWeight: '700',
-                textTransform: 'uppercase',
-                fontSize: '8px',
-                padding: '2px 6px',
-                borderRadius: '4px',
-                background: incident.severity === 'Critical' ? 'rgba(239,68,68,0.12)' : incident.severity === 'Warning' ? 'rgba(245,158,11,0.12)' : 'rgba(16,185,129,0.12)',
-                border: incident.severity === 'Critical' ? '1px solid rgba(239,68,68,0.2)' : incident.severity === 'Warning' ? '1px solid rgba(245,158,11,0.2)' : '1px solid rgba(16,185,129,0.2)'
-              }">
-                {{ incident.severity }}
-              </span>
-              <span style="color: var(--text-muted); font-size: 9px;">{{ incident.timestamp }}</span>
-            </div>
-            <div style="color: #fff; font-weight: 600; font-size: 11px; margin-top: 2px;">{{ incident.type }}</div>
-            <div style="color: var(--text-muted); font-size: 10.5px; line-height: 1.3;">{{ incident.description }}</div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 </div>

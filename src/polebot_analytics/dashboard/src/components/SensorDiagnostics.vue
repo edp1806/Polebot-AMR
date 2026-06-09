@@ -2,11 +2,12 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRos, topicRates} from '../composables/useRos.js'
 import { useBlackBox } from '../composables/useBlackBox.js' 
+import NodeGraph from './NodeGraph.vue'
 
 const { connected} = useRos()
 const {blackBoxLogs} = useBlackBox()
 
-// Simulation dyna;ique des ressources du Robot (CPU, RAM, Température)
+// Dynamic simulation of Robot resources (CPU, RAM, Temperature)
 const cpuUsage = ref(35)
 const ramUsage = ref(42)
 const tempCelsius = ref(45)
@@ -16,7 +17,7 @@ let ressourceInterval = null
 onMounted(() => {
   ressourceInterval = setInterval(() => {
     if (connected.value){
-      // Petites fluctuations réalistes
+      // Small realistic fluctuations
       cpuUsage.value = Math.max(10, Math.min(95, cpuUsage.value + (Math.random() * 10 - 5)))
       ramUsage.value = Math.max(30, Math.min(90, ramUsage.value + (Math.random() * 2 - 1)))
       tempCelsius.value = Math.max(38, Math.min(75, tempCelsius.value + (Math.random() * 1.5 - 0.75)))
@@ -32,7 +33,7 @@ onUnmounted(() => {
   if (ressourceInterval) clearInterval(ressourceInterval)
 })
 
-//Fonction utilitaire de style
+// Style utility function
 function getStatusBadgeClass(status){
   switch (status){
     case 'OK' : return 'badge-green'
@@ -45,7 +46,7 @@ function getStatusBadgeClass(status){
 
 <template>
   <div class="diagnostics-container" style="padding: 25px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; height: 100%;">
-    <!-- Ligne 1: RESSOURCE SYSTÈME -->
+    <!-- Row 1: SYSTEM RESOURCES -->
      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; ">
        <!-- CPU -->
        <div class="card" style="display: flex; align-items: center; justify-content: space-between; padding: 20px;">
@@ -67,21 +68,21 @@ function getStatusBadgeClass(status){
        <!-- Température-->
        <div class="card" style="display: flex; align-items: center; justify-content: space-between; padding: 20px;">
         <div>
-          <h3 style="margin: 0; font-size: 14px; color: var(--text-muted);">CPU Température</h3>
+          <h3 style="margin: 0; font-size: 14px; color: var(--text-muted);">CPU Temperature</h3>
           <span style="font-size: 28px; font-weight: 700; color: #fff;">{{ Math.round(tempCelsius) }}°C</span>
         </div>
         <div style="font-size: 32px;">🌡️</div>
        </div>
      </div>
     
-     <!-- Ligne 2: Grille Diagnostics & Alarmes -->
+     <!-- Row 2: Diagnostics & Alarms Grid -->
       <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px;">
-        <!-- Tableau des Topics-->
+        <!-- Topics Table -->
         <div class="card">
           <h2 style="margin-top: 0; margin-bottom: 20px; font-size: 16px; border-bottom: 1px solid var(--border-color); 
           padding-bottom: 10px;">📡 ROS2 Sensor Topics Monitor</h2>
           <div v-if="!connected" style="text-align: center; color: var(--text-muted); padding: 40px 0;">
-            ❌ COnnecter le robot pour démarrer le diagnostic
+            ❌ Connect the robot to start diagnostics
           </div>
           <table v-else style="width: 100%; border-collapse: collapse; text-align: left;">
             <thead>
@@ -105,7 +106,7 @@ function getStatusBadgeClass(status){
           </table>
           </div>
           
-          <!-- NOEUDS ACTIFS SIMULÉS -->
+          <!-- SIMULATED ACTIVE NODES -->
           <div class="card" style="display: flex; flex-direction: column;">
             <h2 style="margin-top: 0; margin-bottom: 20px; font-size: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
               ⚙️ Active ROS2 Nodes
@@ -120,7 +121,7 @@ function getStatusBadgeClass(status){
           </div>
 
       </div>
-      <!-- Journal des alarmes de sécurité -->
+      <!-- Safety alarms log -->
        <div class="card" style="margin-top: 10px;">
         <h2 style="margin-top: 0; margin-bottom: 15px; font-size: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;
         color: var(--accent-red); display: flex; align-items: center; gap: 8px;">
@@ -143,5 +144,8 @@ function getStatusBadgeClass(status){
           </div>
         </div>
       </div>
+
+    <!-- ROS2 NODE GRAPH (NEW) -->
+    <NodeGraph />
   </div>
 </template>

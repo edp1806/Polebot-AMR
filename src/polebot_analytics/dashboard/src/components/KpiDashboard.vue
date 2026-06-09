@@ -293,7 +293,7 @@ onMounted(() => {
             </div>
         </div>
 
-        <!-- Section HISTORIQUE DES SESSIONS (TABLEAU) -->
+        <!-- SESSION HISTORY SECTION (TABLE) -->
         <h3 style="margin-top: 30px;">🕒 Connection Sessions History</h3>
         
         <div style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px 25px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); margin-top: 15px;">
@@ -381,50 +381,50 @@ onMounted(() => {
 
 <style scoped>
 .kpi-card {
-    background-color: #ffffff; /* Arrière-plan blanc */
-    border: 1px solid #e2e8f0;   /* Bordure gris clair */
-    border-radius: 8px;          /* Coins arrondis */
-    padding: 20px 25px;          /* Espacement intérieur */
-    display: flex;               /* Activer Flexbox */
-    flex-direction: column;      /* Empiler les éléments verticalement */
-    justify-content: center;     /* Centrer verticalement */
-    align-items: center;         /* Centrer horizontalement */
-    transition: transform 0.2s, box-shadow 0.2s; /* Effet de survol doux */
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); /* Ombre légère */
+    background-color: #ffffff; /* White background */
+    border: 1px solid #e2e8f0;   /* Light gray border */
+    border-radius: 8px;          /* Rounded corners */
+    padding: 20px 25px;          /* Inner spacing */
+    display: flex;               /* Enable Flexbox */
+    flex-direction: column;      /* Stack elements vertically */
+    justify-content: center;     /* Center vertically */
+    align-items: center;         /* Center horizontally */
+    transition: transform 0.2s, box-shadow 0.2s; /* Smooth hover effect */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); /* Light shadow */
     cursor: pointer;
 }
 
-/* Effet de survol (hover) */
+/* Hover effect */
 .kpi-card:hover {
-    transform: translateY(-4px); /* Remonte légèrement */
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); /* Ombre plus prononcée */
+    transform: translateY(-4px); /* Moves up slightly */
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); /* Stronger shadow */
 }
 
-/* Style pour le libellé (Current Level, etc.) */
+/* Style for label (Current Level, etc.) */
 .kpi-label {
-    font-size: 0.85rem;          /* Taille de police légèrement plus petite */
-    font-weight: 600;            /* Police en gras */
-    color: #64748b;              /* Couleur gris foncé */
-    margin-bottom: 8px;          /* Marge en dessous */
-    text-transform: uppercase;   /* Texte en majuscules */
-    letter-spacing: 0.5px;       /* Espacement des lettres */
+    font-size: 0.85rem;          /* Slightly smaller font size */
+    font-weight: 600;            /* Bold font */
+    color: #64748b;              /* Dark gray color */
+    margin-bottom: 8px;          /* Margin bottom */
+    text-transform: uppercase;   /* Uppercase text */
+    letter-spacing: 0.5px;       /* Letter spacing */
 }
 
-/* Style pour la valeur (100%, 50%, etc.) */
+/* Style for value (100%, 50%, etc.) */
 .kpi-value {
-    font-size: 2.25rem;          /* Grande taille de police */
-    font-weight: 700;            /* Police en gras */
-    color: #1e293b;              /* Couleur noir/gris très foncé */
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; /* Police moderne */
+    font-size: 2.25rem;          /* Large font size */
+    font-weight: 700;            /* Bold font */
+    color: #1e293b;              /* Very dark gray/black color */
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; /* Modern font */
 }
 
-/* Marge entre les cartes (sur les côtés seulement, pour que ça reste aligné) */
+/* Margin between cards (on the sides only, to keep it aligned) */
 .kpi-card:not(:last-child) {
     margin-right: 15px;
 }
 
 .table-row-hover:hover {
-  background: rgba(59, 130, 246, 0.05); /* Léger halo bleu au survol */
+  background: rgba(59, 130, 246, 0.05); /* Light blue halo on hover */
   transition: background 0.2s ease;
 }
 

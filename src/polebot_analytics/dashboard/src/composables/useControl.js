@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import { useRos } from './useRos.js'
+import { useBlackBox } from './useBlackBox.js'
 
 // --- Singleton state ---
 export const isEStopActive = ref(false)
@@ -10,7 +11,7 @@ export const logs = ref([])
 let eStopTimer = null
 
 export function useControl() {
-  const { connected, odom, startVel, stopVel } = useRos()
+  const { connected, odom, startVel, stopVel, publishVel } = useRos()
 
   // ⚠️ ROS2 ARCHITECTURE NOTICE:
   // Deducing state solely from speed (odom) is a limited approach.
@@ -43,6 +44,17 @@ export function useControl() {
     // Limit log count to 20
     if (logs.value.length > 20) {
       logs.value.pop()
+    }
+
+    // Synchronisation avec la Black Box (pour l'Operator Panel)
+    const { addIncident } = useBlackBox()
+    let severity = 'Info'
+    if (type === 'error') severity = 'Critical'
+    if (type === 'warning') severity = 'Warning'
+    
+    // Avoid double logging E-Stops (already handled by BlackBox watchers)
+    if (!message.includes('Emergency Stop')) {
+      addIncident(severity, 'Operation', message)
     }
   }
 
@@ -81,7 +93,19 @@ export function useControl() {
 
   // Wrapper injecting isEStopActive automatically
   function startVelGuarded(linear, angular) {
+    if (isEStopActive.value) {
+      stopVel()
+      return
+    }
     startVel(linear, angular, isEStopActive)
+  }
+
+  function publishVelGuarded(linear, angular) {
+    if (isEStopActive.value) {
+      stopVel()
+      return
+    }
+    publishVel(linear, angular)
   }
 
   return {
@@ -99,6 +123,7 @@ export function useControl() {
     cancelEStopPress,
     toggleEStop,
     startVelGuarded,
+    publishVelGuarded,
     stopVel
   }
 }
