@@ -15,6 +15,7 @@ import OperatorPanel from './components/OperatorPanel.vue'
 import MaintenancePanel from './components/MaintenancePanel.vue'
 import NodeGraph from './components/NodeGraph.vue'
 import { useAuth } from './auth/useAuth.js'
+import QrcodeVue from 'qrcode.vue'
 
 // --- Roles & Authentication ---
 const { currentUser, isAuthenticated, login, logout } = useAuth()
@@ -62,6 +63,10 @@ const isLightTheme = ref(false)
 const toggleTheme = () => {
   isLightTheme.value = !isLightTheme.value
 }
+
+const showQrModal = ref(false)
+const customIp = ref(hostIp === 'localhost' ? '172.16.33.69' : hostIp)
+const dashboardUrl = computed(() => `http://${customIp.value}:${window.location.port || '5173'}/teleop`)
 
 const route = useRoute()
 const activeTab = computed(() => route.query.tab || 'control')
@@ -174,6 +179,25 @@ setInterval(() => {
       </div>
     </div>
 
+    <!-- QR CODE MODAL -->
+    <div v-if="showQrModal" style="position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 10001;" @click="showQrModal = false">
+      <div class="card" style="padding: 40px; display: flex; flex-direction: column; align-items: center; gap: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.7);" @click.stop>
+        <div style="font-size: 30px;">📱</div>
+        <h2 style="margin: 0; font-size: 20px; color: var(--text-primary);">Mobile Pairing</h2>
+        <p style="font-size: 13px; color: var(--text-muted); text-align: center; max-width: 250px;">Scan this QR code with your mobile device to instantly access the teleoperation remote.</p>
+        
+        <div style="width: 100%; display: flex; flex-direction: column; gap: 8px; align-items: center;">
+          <input v-model="customIp" type="text" placeholder="IP Address" style="width: 200px; padding: 8px; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 6px; text-align: center; font-size: 13px;" />
+          <div style="background: #fff; padding: 15px; border-radius: 12px; margin-top: 5px;">
+            <qrcode-vue :value="dashboardUrl" :size="200" level="M" />
+          </div>
+        </div>
+        
+        <p style="color: var(--accent-blue); font-family: monospace; font-size: 11px; word-break: break-all; text-align: center; max-width: 280px;">{{ dashboardUrl }}</p>
+        <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" @click="showQrModal = false">Close</button>
+      </div>
+    </div>
+
     <!-- LEFT SIDEBAR -->
     <aside style="width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; z-index: 10;">
       <!-- Brand / Logo -->
@@ -192,7 +216,7 @@ setInterval(() => {
         <router-link :to="{ query: { tab: 'control' } }" class="sidebar-item" :class="{ 'active': activeTab === 'control' }" style="text-decoration:none;">
           <span style="font-size: 16px;">🎮</span> Live Control
         </router-link>
-        
+
         <router-link :to="{ query: { tab: 'operator' } }" class="sidebar-item" :class="{ 'active': activeTab === 'operator' }" style="text-decoration:none;">
           <span style="font-size: 16px;">🛡️</span> Operator Panel
         </router-link>
@@ -240,6 +264,10 @@ setInterval(() => {
           </div>
         </div>
 
+        <button @click="showQrModal = true" class="btn" style="width: 100%; margin-top: 15px; font-size: 12px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); text-align: center; padding: 10px;">
+          📱 Pair Mobile Device
+        </button>
+
         <button @click="handleLogout" class="btn" style="width: 100%; margin-top: 10px; font-size: 12px; background: rgba(239, 68, 68, 0.1); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.3); text-align: center; padding: 10px;">
           🔒 Disconnect & Switch User
         </button>
@@ -252,7 +280,7 @@ setInterval(() => {
       <!-- TOP HEADER -->
       <header style="height: 65px; min-height: 65px; padding: 0 25px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); background: var(--bg-header); box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
         <div style="font-size: 18px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 10px;">
-          {{ activeTab === 'control' ? 'Live Control' : activeTab === 'operator' ? 'Operator Panel' : activeTab === 'analytics' ? 'Analytics & Data Historian' : activeTab === 'kpi' ? 'KPI Dashboard' : 'System Diagnostics' }}
+          {{ activeTab === 'control' ? 'Live Control' : activeTab === 'operator' ? 'Operator Panel' : activeTab === 'analytics' ? 'Analytics & Data Historian' : activeTab === 'kpi' ? 'KPI Dashboard' : activeTab === 'architecture' ? 'System Architecture' : activeTab === 'maintenance' ? 'Predictive Maintenance' : 'System Diagnostics' }}
           <span style="color:var(--text-muted); font-size:14px; font-weight:400;">/ {{ selectedRobotId }}</span>
         </div>
 
@@ -306,37 +334,6 @@ setInterval(() => {
 </template>
 
 <style>
-:root {
-  --bg-main: #0a0e1a;
-  --bg-sidebar: #111827;
-  --bg-header: #151e32;
-  --bg-card: #1f2937;
-  --bg-secondary: #374151;
-  --text-primary: #f3f4f6;
-  --text-muted: #9ca3af;
-  --text-secondary: #6b7280;
-  --border-color: #2e3a53;
-  --accent-blue: #3b82f6;
-  --accent-green: #10b981;
-  --accent-red: #ef4444;
-  --accent-yellow: #f59e0b;
-}
-
-[data-theme="light"] {
-  --bg-main: #f1f5f9;
-  --bg-sidebar: #ffffff;
-  --bg-header: #ffffff;
-  --bg-card: #ffffff;
-  --bg-secondary: #f8fafc;
-  --text-primary: #0f172a;
-  --text-muted: #64748b;
-  --text-secondary: #475569;
-  --border-color: #e2e8f0;
-  --accent-blue: #2563eb;
-  --accent-green: #059669;
-  --accent-red: #dc2626;
-  --accent-yellow: #d97706;
-}
 
 .sidebar-item {
   width: 100%; display: flex; align-items: center; gap: 12px;

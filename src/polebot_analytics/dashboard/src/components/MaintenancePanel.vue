@@ -30,9 +30,7 @@ const getHealthColor = (health) => {
 </script>
 
 <template>
-  <div class="maintenance-container" style="padding: 25px; overflow-y: auto; height: 100%;">
-    <h2 style="margin-top: 0; color: var(--text-primary); margin-bottom: 25px; font-size: 20px;">🔧 Predictive Maintenance</h2>
-
+  <div class="maintenance-container" style="padding: 25px; overflow-y: auto; height: 100%;"> 
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px;">
       <div class="card" style="display: flex; align-items: center; justify-content: space-between; padding: 20px;">
         <div>
@@ -51,7 +49,7 @@ const getHealthColor = (health) => {
       </div>
     </div>
 
-    <h3 style="color: var(--text-primary); margin-bottom: 15px; font-size: 15px;">Component Health Status</h3>
+    <h3 style="color: black; margin-bottom: 15px; font-size: 15px;">Component Health Status</h3>
     
     <div style="display: flex; flex-direction: column; gap: 15px;">
       <!-- Motors -->

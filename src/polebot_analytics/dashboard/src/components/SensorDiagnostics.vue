@@ -144,8 +144,5 @@ function getStatusBadgeClass(status){
           </div>
         </div>
       </div>
-
-    <!-- ROS2 NODE GRAPH (NEW) -->
-    <NodeGraph />
   </div>
 </template>

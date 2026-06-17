@@ -183,13 +183,12 @@ const recentAlarms = computed(() =>
         </div>
 
         <!-- Teleop link -->
-        <div class="card" style="text-align:center;">
-          <div class="card-title" style="justify-content:center;"><span>🕹️</span> Movement Test</div>
-          <p style="font-size:11px; color:var(--text-muted); margin-bottom:12px;">
-            Manual control interface for testing (separate page, outside project)
-          </p>
+        <div class="card warning-card">
+          <div style="font-size:12px; font-weight:600; color:var(--accent-yellow); margin-bottom:8px;">
+            ⚠️ Movement Test
+          </div>
           <a href="/teleop" target="_blank" class="teleop-link">
-            Open test page ↗
+            Open Teleoperation Dashboard ↗
           </a>
         </div>
       </div>

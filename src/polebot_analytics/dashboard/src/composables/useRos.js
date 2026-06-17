@@ -123,7 +123,7 @@ export function useRos() {
 
         pingInterval = setInterval(() => {
           if (!connected.value || !ros) return
-          console.log("[Ping] Attempting to call parameter service...");
+          // console.log("[Ping] Attempting to call parameter service...");
           const start = performance.now()
 
           const paramService = new ROSLIB.Service({
@@ -140,7 +140,7 @@ export function useRos() {
             const end = performance.now()
             const latency = Math.round(end - start)
             connectionPing.value = latency
-            console.log(`[Ping] Success! Latency measured: ${latency} ms. Low bandwidth mode: ${latency >= 150}`);
+            // console.log(`[Ping] Success! Latency measured: ${latency} ms. Low bandwidth mode: ${latency >= 150}`);
 
             // Auto low-bandwidth mode if ping is high (>= 150ms)
             isLowBandwidthMode.value = (latency >= 150)

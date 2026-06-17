@@ -9,7 +9,7 @@ import { useMap, activeGoal, mapCanvasRef } from '../composables/useMap.js'
 import { useAudio } from '../composables/useAudio.js'
 import { useBlackBox } from '../composables/useBlackBox.js'
 
-const { odom, sensors, mapInfo, sendNavGoal, cancelNavGoal, sendExplorationEnable, saveMap, clearMapSession, proximityWarning, minDetectedRange } = useRos()
+const { connected, odom, sensors, mapInfo, sendNavGoal, cancelNavGoal, sendExplorationEnable, saveMap, clearMapSession, proximityWarning, minDetectedRange } = useRos()
 const { battery } = useBattery()
 const {
   isEStopActive, maxLinearSpeed, maxAngularSpeed, logs,
@@ -131,39 +131,28 @@ function handleMapClick(event){
   const canvas = mapCanvas.value
   if (!canvas) return
   
-  //1. Get click coordinates relative to the canvas element bounds
   const rect = canvas.getBoundingClientRect()
-
-  //Account for CSS transform scaling (zoom) and border offsets
   const clickX = (event.clientX - rect.left) * (canvas.width / rect.width)
   const clickY = (event.clientY - rect.top) * (canvas.height / rect.height)
-
-  //2. convert canvas pixel coordinates to real-world meters
   const {wx, wy} = canvasToWorld(clickX, clickY)
 
-  //3. Set the target goal marker on the map canvas
   setGoal(wx, wy)
-
-  //4. Publish Nav2 / goal_pose to ROS2 bridge
   sendNavGoal(wx, wy)
-  
-  //5. Add a visual status log
   addLog(`🎯 New autonomous mission: X=${wx.toFixed(2)}, Y=${wy.toFixed(2)}`, 'info')
   addIncident('Info', 'Goal Dispatched', `New navigation target set to X=${wx.toFixed(2)}, Y=${wy.toFixed(2)}`)
 }
+
 
 function handleCancelGoal(){
   clearGoal()
   cancelNavGoal()
   addIncident('Warning', 'Goal Cancelled', 'Navigation mission cancelled by operator.')
-  // Déclencher le HUD bleu pour l'annulation de mission
   triggerScreenAlert(
     "MISSION CANCELLED",
     "Autonomous navigation cancelled. Target and trajectory reset.",
     "cancel"
   )
 }
-
 
 // ----- THE GAME LOOP -----
 let isLoopRunning = false
@@ -450,11 +439,11 @@ onUnmounted(() => {
         </p>
         <div style="display:flex; flex-direction:column; gap:8px;">
           <button v-if="!missionStartTime" class="btn btn-primary" style="padding: 12px; font-weight: bold; width: 100%; background: var(--accent-green);" @click="startMissionTracker()">
-            ▶️ Start Mission
+            ▶️ Start Timer
           </button>
           
           <button v-else class="btn" style="padding: 12px; font-weight: bold; width: 100%; background: rgba(239,68,68,0.2); border: 1px solid var(--accent-red); color: var(--accent-red);" @click="endMissionTracker()">
-            ⏹️ End Mission (Save Cycle Time)
+            ⏹️ End Timer (Save Cycle Time)
           </button>
         </div>
       </div>
@@ -608,6 +597,8 @@ onUnmounted(() => {
 .btn-resolve:hover {
   background: rgba(239, 68, 68, 0.8);
 }
+
+.log-item.log-error { border-left-color: var(--accent-red); background: rgba(239, 68, 68, 0.05); }
 
 @keyframes pulse-border-estop {
   0% {

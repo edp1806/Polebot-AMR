@@ -70,7 +70,6 @@ const getPath = (sourceId, targetId) => {
 <template>
   <div style="padding: 25px; height: 100%; display: flex; flex-direction: column; overflow-y: auto;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px;">
-      <h2 style="margin: 0; color: var(--text-primary); font-size: 20px;">🕸️ System Architecture & Node Graph</h2>
       <div style="display: flex; gap: 15px; font-size: 12px; color: var(--text-muted); background: var(--bg-card); padding: 8px 15px; border-radius: 8px; border: 1px solid var(--border-color);">
         <span style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; background:var(--bg-card); border:2px solid var(--accent-blue); border-radius:50%;"></div> ROS2 Node</span>
         <span style="display:flex; align-items:center; gap:8px;"><div style="width:14px; height:14px; background:var(--bg-card); border:2px solid var(--accent-green);"></div> ROS2 Topic</span>
