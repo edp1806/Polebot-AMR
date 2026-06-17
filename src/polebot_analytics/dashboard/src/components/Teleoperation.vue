@@ -212,9 +212,10 @@ h1 { font-size: 22px; font-weight: 700; margin: 0; }
 .dpad-wrap { position: relative; }
 .dpad-wrap.dimmed .dpad { opacity: 0.2; pointer-events: none; }
 .dpad {
-  display: grid; grid-template-columns: repeat(3, 130px);
-  grid-template-rows: repeat(3, 110px);
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, minmax(80px, 110px));
   gap: 10px;
+  width: 100%; max-width: 410px; margin: 0 auto;
 }
 .btn-dir, .btn-stop {
   border-radius: 12px; border: 2px solid #2e3a53;
@@ -273,5 +274,16 @@ kbd {
   background: #21262d; border: 1px solid #444;
   border-radius: 4px; padding: 2px 7px;
   font-family: monospace; font-size: 11px; color: #ccc;
+}
+
+@media (max-width: 600px) {
+  .page { padding: 15px 10px; gap: 15px; }
+  .header { display: none; } /* Hide redundant header on mobile */
+  .keys-hint { display: none; } /* No keyboard on mobile */
+  .dpad { grid-template-rows: repeat(3, 90px); gap: 6px; }
+  .btn-dir, .btn-stop { padding: 5px; }
+  .arrow { font-size: 24px; }
+  .feedback { gap: 12px; padding: 10px; font-size: 11px; }
+  .estop { padding: 14px; font-size: 12px; }
 }
 </style>

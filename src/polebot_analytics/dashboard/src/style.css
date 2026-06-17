@@ -48,6 +48,7 @@ body {
   background: var(--bg-secondary);
   color: var(--text-primary);
   min-height: 100vh;
+  overscroll-behavior-y: none;
 }
 
 #app {

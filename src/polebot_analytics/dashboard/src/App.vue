@@ -12,7 +12,6 @@ import LiveControl from './components/LiveControl.vue'
 import AnalyticsHistory from './components/AnalyticsHistory.vue'
 import SensorDiagnostics  from './components/SensorDiagnostics.vue'
 import OperatorPanel from './components/OperatorPanel.vue'
-import MaintenancePanel from './components/MaintenancePanel.vue'
 import NodeGraph from './components/NodeGraph.vue'
 import { useAuth } from './auth/useAuth.js'
 import QrcodeVue from 'qrcode.vue'
@@ -236,10 +235,6 @@ setInterval(() => {
         <router-link v-if="isAdmin" :to="{ query: { tab: 'architecture' } }" class="sidebar-item" :class="{ 'active': activeTab === 'architecture' }" style="text-decoration:none;">
           <span style="font-size: 16px;">🕸️</span> Architecture
         </router-link>
-
-        <router-link v-if="isAdmin" :to="{ query: { tab: 'maintenance' } }" class="sidebar-item" :class="{ 'active': activeTab === 'maintenance' }" style="text-decoration:none;">
-          <span style="font-size: 16px;">🔧</span> Maintenance
-        </router-link>
       </nav>
 
       <!-- Fleet Selector & Roles -->
@@ -280,7 +275,7 @@ setInterval(() => {
       <!-- TOP HEADER -->
       <header style="height: 65px; min-height: 65px; padding: 0 25px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); background: var(--bg-header); box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
         <div style="font-size: 18px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 10px;">
-          {{ activeTab === 'control' ? 'Live Control' : activeTab === 'operator' ? 'Operator Panel' : activeTab === 'analytics' ? 'Analytics & Data Historian' : activeTab === 'kpi' ? 'KPI Dashboard' : activeTab === 'architecture' ? 'System Architecture' : activeTab === 'maintenance' ? 'Predictive Maintenance' : 'System Diagnostics' }}
+          {{ activeTab === 'control' ? 'Live Control' : activeTab === 'operator' ? 'Operator Panel' : activeTab === 'analytics' ? 'Analytics & Data Historian' : activeTab === 'kpi' ? 'KPI Dashboard' : activeTab === 'architecture' ? 'System Architecture' : 'System Diagnostics' }}
           <span style="color:var(--text-muted); font-size:14px; font-weight:400;">/ {{ selectedRobotId }}</span>
         </div>
 
@@ -318,7 +313,6 @@ setInterval(() => {
       <KpiDashboard v-show="isAdmin && activeTab === 'kpi'" />
       <SensorDiagnostics v-show="isAdmin && activeTab === 'diagnostics'" />
       <NodeGraph v-show="isAdmin && activeTab === 'architecture'" />
-      <MaintenancePanel v-show="isAdmin && activeTab === 'maintenance'" />
 
       <!-- TOAST CONTAINER -->
       <div style="position: absolute; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 9999;">

@@ -179,7 +179,7 @@ body { font-family: 'Inter', -apple-system, sans-serif; color: var(--text-primar
 </style>
 
 <style scoped>
-.page-wrap { width: 100vw; height: 100vh; overflow: hidden; }
+.page-wrap { width: 100vw; height: 100vh; overflow: hidden; overscroll-behavior: none; }
 
 /* ===== LOGIN ===== */
 .login-bg {
@@ -256,9 +256,9 @@ body { font-family: 'Inter', -apple-system, sans-serif; color: var(--text-primar
 .teleop-wrap { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--bg-main); }
 
 .tp-header {
-  height: 62px; min-height: 62px;
+  min-height: 62px;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 20px; gap: 16px;
+  padding: 10px 20px; gap: 16px; flex-wrap: wrap;
   background: var(--bg-header);
   border-bottom: 1px solid var(--border-color);
   box-shadow: 0 4px 20px rgba(0,0,0,0.15);
@@ -267,8 +267,8 @@ body { font-family: 'Inter', -apple-system, sans-serif; color: var(--text-primar
 .tp-title { font-size: 15px; font-weight: 700; color: #fff; }
 .tp-sub { font-size: 11px; color: var(--text-muted); }
 
-.tp-center { display: flex; align-items: center; gap: 8px; flex: 1; justify-content: center; }
-.tp-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.tp-center { display: flex; align-items: center; gap: 8px; flex: 1; justify-content: center; flex-wrap: wrap; }
+.tp-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
 
 .ws-input {
   background: rgba(255,255,255,0.06);
@@ -299,4 +299,15 @@ body { font-family: 'Inter', -apple-system, sans-serif; color: var(--text-primar
 .user-icon { font-size: 18px; }
 .user-name { font-size: 13px; font-weight: 600; color: #fff; }
 .user-role { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+@media (max-width: 600px) {
+  .login-card { padding: 24px 20px; }
+  .tp-header { flex-direction: column; align-items: stretch; }
+  .tp-left { justify-content: center; }
+  .tp-center { justify-content: stretch; }
+  .ws-input { flex: 1; }
+  .tp-right { justify-content: stretch; }
+  .hbtn { flex: 1; justify-content: center; }
+  .user-info { display: none; }
+}
 </style>
