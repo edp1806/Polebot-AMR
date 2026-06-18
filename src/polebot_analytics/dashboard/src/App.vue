@@ -64,7 +64,7 @@ const toggleTheme = () => {
 }
 
 const showQrModal = ref(false)
-const customIp = ref(hostIp === 'localhost' ? '172.16.33.69' : hostIp)
+const customIp = ref(hostIp === 'localhost' ? '172.16.21.113' : hostIp)
 const dashboardUrl = computed(() => `http://${customIp.value}:${window.location.port || '5173'}/teleop`)
 
 const route = useRoute()
@@ -107,6 +107,14 @@ function disconnectRos() {
   // 3. Reset the timer and clear start time in localStorage
   resetUsageTime()
 }
+
+// Ensure session is closed and reset if the user closes the window or tab
+window.addEventListener('beforeunload', () => {
+  if (usageTime.value > 0 && sessionStartTime.value) {
+    saveSessionToInflux(usageTime.value, sessionStartTime.value)
+  }
+  resetUsageTime()
+})
 
 // --- setInterval: Battery discharge + InfluxDB sync (once per second) ---
 setInterval(() => {

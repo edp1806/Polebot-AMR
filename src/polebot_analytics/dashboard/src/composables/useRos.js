@@ -42,6 +42,7 @@ let pingInterval = null
 let mapCounter = 0
 let demoInterval = null
 let demoTime = 0
+let ratesInterval = null
 
 watch(isDemoMode, (newVal) => {
   if (newVal) {

@@ -6,7 +6,6 @@ import { useBattery } from '../composables/useBattery.js'
 import { useInfluxDB } from '../composables/useInfluxDB.js'
 import { Point } from '@influxdata/influxdb-client'
 import { useMap, activeGoal, mapCanvasRef } from '../composables/useMap.js'
-import { useAudio } from '../composables/useAudio.js'
 import { useBlackBox } from '../composables/useBlackBox.js'
 
 const { connected, odom, sensors, mapInfo, sendNavGoal, cancelNavGoal, sendExplorationEnable, saveMap, clearMapSession, proximityWarning, minDetectedRange } = useRos()
@@ -19,10 +18,7 @@ const {
 } = useControl()
 const { writeApi, selectedRobotId } = useInfluxDB()
 const { mapZoom, renderCanvas, canvasToWorld, setGoal, clearGoal } = useMap()
-const { playEstopAlarm, playProximityAlarm, initAudio } = useAudio()
 const { blackBoxLogs, addIncident, clearBlackBox, exportBlackBoxAsJSON } = useBlackBox()
-
-const isAudioMuted = ref(false)
 const logTab = ref('system')
 const isLidarEquipped = ref(true) // Physical robot configuration: set to false for versions without Lidar
 
@@ -163,34 +159,20 @@ function startRenderLoop() {
   requestAnimationFrame(startRenderLoop)
 }
 
-let audioInterval = null
-
 onMounted(() => {
   mapCanvasRef.value = mapCanvas.value
   if (!isLoopRunning) {
     isLoopRunning = true
     requestAnimationFrame(startRenderLoop)
   }
-
-  // Synthesizer loops: plays alarms if active and not muted
-  audioInterval = setInterval(() => {
-    if (isAudioMuted.value) return
-    
-    if (isEStopActive.value) {
-      playEstopAlarm()
-    } else if (proximityWarning.value && isLidarEquipped.value) {
-      playProximityAlarm()
-    }
-  }, 1000)
 })
 
 onUnmounted(() => {
-  if (audioInterval) clearInterval(audioInterval)
 })
 </script>
 
 <template>
-  <div class="live-control-container" @click="initAudio">
+  <div class="live-control-container">
     <!-- Visual HUD Screen Alert Overlay (Fermeture au clic ou après 5s) -->
     <div v-if="screenAlert" class="hud-overlay" @click.stop="screenAlert = null">
       <div class="hud-card" :class="{ 'estop-card': screenAlert.type === 'estop', 'proximity-card': screenAlert.type === 'proximity', 'cancel-card': screenAlert.type === 'cancel' }">
@@ -223,9 +205,6 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="alarm-actions">
-        <button class="btn btn-mute" @click.stop="isAudioMuted = !isAudioMuted">
-          {{ isAudioMuted ? "🔇 Unmute Alarm" : "🔊 Mute Alarm" }}
-        </button>
         <button v-if="isEStopActive" class="btn btn-resolve" @click.stop="toggleEStop">
           🔧 Resolve E-Stop
         </button>
