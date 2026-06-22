@@ -1,7 +1,8 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRos } from '../composables/useRos.js'
 import { useControl } from '../composables/useControl.js'
+import { useAuth } from '../auth/useAuth.js'
 
 const { odom, connected } = useRos()
 const {
@@ -9,11 +10,15 @@ const {
   startEStopPress, cancelEStopPress,
   startVelGuarded, stopVel, toggleEStop
 } = useControl()
+const { currentUser } = useAuth()
+
+// Only 'admin' role can send commands to the robot
+const canControl = computed(() => currentUser.value?.role === 'admin')
 
 const activeDir = ref(null)
 
 function press(dir, lin, ang) {
-  if (!connected.value || isEStopActive.value) return
+  if (!connected.value || isEStopActive.value || !canControl.value) return
   activeDir.value = dir
   startVelGuarded(lin, ang)
 }
@@ -23,8 +28,9 @@ function release() {
   stopVel()
 }
 
-// Keyboard
+// Keyboard — restricted to admins
 function onKeyDown(e) {
+  if (!canControl.value) return
   if (e.repeat || e.target.tagName === 'INPUT') return
   const k = e.key.toLowerCase()
   if (['w', 'arrowup'].includes(k))    { e.preventDefault(); press('fwd',  maxLinearSpeed.value,  0) }
@@ -61,7 +67,8 @@ onUnmounted(() => {
       </span>
     </div>
 
-    <!-- E-STOP -->
+    <!-- E-STOP — admin only -->
+    <template v-if="canControl">
     <button
       class="estop"
       :class="{ locked: isEStopActive }"
@@ -76,6 +83,12 @@ onUnmounted(() => {
     <button v-if="isEStopActive" class="unlock" @click="toggleEStop">
       🔧 Unlock
     </button>
+    </template>
+
+    <!-- Read-only notice for operators -->
+    <div v-else class="operator-notice">
+      👁️ Read-only mode — You do not have permission to control the robot.
+    </div>
 
     <!-- DPAD -->
     <div class="dpad-wrap" :class="{ dimmed: !connected || isEStopActive }">
@@ -131,8 +144,8 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- SPEEDS -->
-    <div class="sliders">
+    <!-- SPEEDS — admin only -->
+    <div class="sliders" v-if="canControl">
       <div class="slider-row">
         <label>Max linear : <strong>{{ maxLinearSpeed.toFixed(1) }} m/s</strong></label>
         <input type="range" min="0.1" max="1.5" step="0.1" v-model.number="maxLinearSpeed" />
@@ -151,8 +164,8 @@ onUnmounted(() => {
       <span>Y : <strong>{{ odom.y }} m</strong></span>
     </div>
 
-    <!-- KEYS -->
-    <div class="keys-hint">
+    <!-- KEYS — admin only -->
+    <div class="keys-hint" v-if="canControl">
       <kbd>W</kbd>/<kbd>↑</kbd> Forward &nbsp;
       <kbd>S</kbd>/<kbd>↓</kbd> Backward &nbsp;
       <kbd>A</kbd>/<kbd>←</kbd> Left &nbsp;
@@ -183,6 +196,19 @@ h1 { font-size: 22px; font-weight: 700; margin: 0; }
 }
 .badge.green { background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
 .badge.red   { background: rgba(239,68,68,0.15);  color: #ef4444; border: 1px solid rgba(239,68,68,0.3); }
+
+/* Operator read-only notice */
+.operator-notice {
+  width: 100%; max-width: 520px;
+  padding: 14px 20px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-left: 3px solid #f59e0b;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #f59e0b;
+  text-align: center;
+}
 
 /* ESTOP */
 .estop {

@@ -64,7 +64,12 @@ const toggleTheme = () => {
 }
 
 const showQrModal = ref(false)
-const customIp = ref(hostIp === 'localhost' ? '172.16.21.113' : hostIp)
+// Auto-detect the real network IP from the Vite dev server's Network URL.
+// When the dashboard is opened via http://localhost, the phone can't reach it,
+// so the user must type the machine's LAN IP once in the editable field.
+// When the dashboard is opened via the LAN IP directly (e.g. http://10.x.x.x:5173),
+// hostIp already contains the correct IP and the QR code is always accurate.
+const customIp = ref(hostIp !== 'localhost' ? hostIp : '10.172.105.220')
 const dashboardUrl = computed(() => `http://${customIp.value}:${window.location.port || '5173'}/teleop`)
 
 const route = useRoute()
