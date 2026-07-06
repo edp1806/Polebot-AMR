@@ -1,14 +1,16 @@
 import { ref, computed } from 'vue'
 import { useRos } from './useRos.js'
 import { useBlackBox } from './useBlackBox.js'
+import { isEStopActive, setEStop } from './useEStop.js'
 
 // --- Singleton state ---
-export const isEStopActive = ref(false)
+export { isEStopActive } // Re-export for components that import from useControl
 export const maxLinearSpeed = ref(0.5)   // m/s
 export const maxAngularSpeed = ref(0.5)  // rad/s
 export const logs = ref([])
 
 let eStopTimer = null
+let eStopBroadcastInterval = null
 
 export function useControl() {
   const { connected, odom, startVel, stopVel, publishVel } = useRos()
@@ -82,11 +84,21 @@ export function useControl() {
   }
 
   function toggleEStop() {
-    isEStopActive.value = !isEStopActive.value
-    if (isEStopActive.value) {
+    const newState = !isEStopActive.value
+    // Use setEStop() to broadcast the new state to ALL open tabs (dashboard + /teleop)
+    setEStop(newState)
+    if (newState) {
       stopVel()
       addLog("Emergency Stop activated!", "error")
+      // Continuously broadcast v=0/w=0 while E-Stop is active
+      eStopBroadcastInterval = setInterval(() => {
+        stopVel()
+      }, 200)
     } else {
+      if (eStopBroadcastInterval) {
+        clearInterval(eStopBroadcastInterval)
+        eStopBroadcastInterval = null
+      }
       addLog("Emergency Stop deactivated!", "success")
     }
   }
@@ -97,7 +109,7 @@ export function useControl() {
       stopVel()
       return
     }
-    startVel(linear, angular, isEStopActive)
+    startVel(linear, angular)
   }
 
   function publishVelGuarded(linear, angular) {

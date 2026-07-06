@@ -43,6 +43,8 @@ const mapCanvas = ref(null)
 
 const cameraTopic = ref('/depth_camera/rgb/image_raw')
 const hostIp = window.location.hostname || 'localhost'
+const cameraLoaded = ref(false)
+const cameraStreamKey = ref(0)
 
 const screenAlert = ref(null) // {title,message,type}
 let lastProximityAlertTime = 0
@@ -459,12 +461,22 @@ onUnmounted(() => {
           <h2 style="margin:0;">📷 Live Camera</h2>
           <input type="text" v-model="cameraTopic" placeholder="/depth_camera/rgb/image_raw" style="width: 170px; font-size: 10px; padding: 4px; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px;">
         </div>
-        <div style="background: #000; border-radius: 6px; overflow: hidden; min-height: 160px; display: flex; align-items: center; justify-content: center; position: relative;">
-          <div style="color: var(--text-muted); font-size: 11px; position: absolute; text-align: center; padding: 10px;">
-            Waiting for camera feed...<br>
-            <code style="font-size: 9px;">ros2 run web_video_server web_video_server</code>
+        <div style="background: #000; border-radius: 6px; overflow: hidden; min-height: 160px; position: relative;">
+          <img
+            :key="cameraStreamKey"
+            :src="`http://${hostIp}:8080/stream?topic=${cameraTopic}&type=mjpeg&quality=50`"
+            style="width: 100%; display: block; min-height: 160px; object-fit: contain;"
+            @load="cameraLoaded = true"
+            @error="cameraLoaded = false"
+          />
+          <div v-if="!cameraLoaded" style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-muted); font-size:11px; text-align:center; padding:10px; background:#000;">
+            <span>Waiting for camera feed...</span><br>
+            <code style="font-size:9px; margin-top:6px;">ros2 run web_video_server web_video_server</code><br>
+            <button @click="cameraStreamKey++" style="margin-top:10px; padding:4px 10px; font-size:10px; background:var(--bg-tertiary); border:1px solid var(--border-color); color:var(--text-primary); border-radius:4px; cursor:pointer;">Retry</button>
           </div>
-          <img :src="`http://${hostIp}:8080/stream?topic=${cameraTopic}`" style="width: 100%; position: relative; z-index: 1; display: none;" onload="this.style.display='block'" onerror="this.style.display='none'" />
+        </div>
+        <div style="margin-top:4px; font-size:9px; color:var(--text-muted); word-break:break-all; opacity:0.6;">
+          {{ `http://${hostIp}:8080/stream?topic=${cameraTopic}&type=mjpeg` }}
         </div>
       </div>
 

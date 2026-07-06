@@ -1,5 +1,6 @@
 import { ref, watch } from 'vue'
 import * as ROSLIB from 'roslib'
+import { isEStopActive } from './useEStop.js'
 
 // --- Singleton state (shared across all components) ---
 export const connected = ref(false)
@@ -279,6 +280,12 @@ export function useRos() {
 
   // ----- Manual Control -----
   function publishVel(linear, angular) {
+    // Global E-Stop guard: block ALL cmd_vel publications if E-Stop is active
+    if (isEStopActive.value) {
+      const stopTwist = { linear: { x: 0.0, y: 0.0, z: 0.0 }, angular: { x: 0.0, y: 0.0, z: 0.0 } }
+      if (cmdVelTopic && connected.value) cmdVelTopic.publish(stopTwist)
+      return
+    }
     if (!cmdVelTopic || !connected.value) return
     const twist = {
       linear: { x: linear, y: 0.0, z: 0.0 },
@@ -287,11 +294,22 @@ export function useRos() {
     cmdVelTopic.publish(twist)
   }
 
-  function startVel(linear, angular, isEStopActive) {
+  function startVel(linear, angular) {
+    // Global E-Stop guard: block ALL cmd_vel publications if E-Stop is active
+    if (isEStopActive.value) {
+      stopVel()
+      return
+    }
     if (!cmdVelTopic || !connected.value) return
     if (velInterval) clearInterval(velInterval)
 
     velInterval = setInterval(() => {
+      // Re-check on every tick in case E-Stop was activated mid-movement
+      if (isEStopActive.value) {
+        clearInterval(velInterval)
+        stopVel()
+        return
+      }
       const twist = {
         linear: { x: linear, y: 0.0, z: 0.0 },
         angular: { x: 0.0, y: 0.0, z: angular }
@@ -315,6 +333,11 @@ export function useRos() {
   }
 
   function sendNavGoal(wx, wy) {
+    // E-Stop guard: never send navigation goals if E-Stop is active
+    if (isEStopActive.value) {
+      console.warn('[useRos] sendNavGoal blocked — E-Stop is active')
+      return
+    }
     console.log("=== sendNavGoal ===");
     console.log("wx:", wx, "wy:", wy);
     console.log("goalTopic:", goalTopic);

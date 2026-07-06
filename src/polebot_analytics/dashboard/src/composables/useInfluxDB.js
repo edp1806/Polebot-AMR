@@ -407,10 +407,15 @@ export function useInfluxDB() {
     if (!influxDB || !selectedRobotId.value) return
     const queryApi = influxDB.getQueryApi(influxOrg)
 
-    // Query historical sessions for the last 30 days (start: -30d)
+    // Compute the first day of the current month at midnight UTC
+    const now = new Date()
+    const firstDayOfMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1))
+    const startOfMonth = firstDayOfMonth.toISOString()
+
+    // Query sessions for the current month only
     const query = `
       from(bucket: "${influxBucket}")
-        |> range(start: -30d)
+        |> range(start: ${startOfMonth})
         |> filter(fn: (r) => r._measurement == "robot_session")
         |> filter(fn: (r) => r.robot_id == "${selectedRobotId.value}")
         // Pivot merges the duration and start_time fields into a single record

@@ -91,11 +91,16 @@ export function useBattery() {
 
     function resetUsageTime() {
         //Save last session info before clearing
-        if (usageTime.value > 0 && sessionStartTime.value) {
+        if (sessionStartTime.value) {
+            const endTime = new Date()
+            const startTime = new Date(sessionStartTime.value)
+            // Real wall-clock duration (in seconds) = difference between start and end timestamps
+            const realDurationSeconds = Math.round((endTime - startTime) / 1000)
+
             lastSession.value = {
-                startTime: new Date(sessionStartTime.value).toLocaleString(),
-                endTime: new Date().toLocaleString(),
-                duration: usageTime.value,
+                startTime: startTime.toLocaleString(),
+                endTime: endTime.toLocaleString(),
+                duration: realDurationSeconds,
                 finalBattery: Math.round(battery.value)
             }
         }

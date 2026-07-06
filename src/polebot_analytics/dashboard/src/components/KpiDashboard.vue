@@ -298,7 +298,7 @@ onMounted(() => {
         
         <div style="background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px 25px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); margin-top: 15px;">
             <div style="font-size: 11px; color: #64748b; margin-bottom: 15px; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">
-                Last 30 Days History
+                Sessions — {{ new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' }) }}
             </div>
             <!-- Interactive filters bar -->
             <div style="display: flex; gap: 20px; align-items: center; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px 15px; margin-bottom: 15px;">
@@ -354,9 +354,9 @@ onMounted(() => {
                     </thead>
                     <tbody>
                         <!-- If no sessions are registered -->
-                        <tr v-if="sessionHistory.length === 0">
+                        <tr v-if="filteredSessions.length === 0">
                             <td colspan="3" style="padding: 20px; text-align: center; color: #64748b; font-style: italic;">
-                                No connection sessions recorded yet.
+                                No connection sessions recorded this month.
                             </td>
                         </tr>
                         <!-- Dynamic display loop -->
