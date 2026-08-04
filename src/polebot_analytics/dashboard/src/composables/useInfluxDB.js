@@ -2,15 +2,41 @@ import { ref } from 'vue'
 import { InfluxDB, Point } from '@influxdata/influxdb-client'
 import Chart from 'chart.js/auto'
 
-// --- INFLUXDB CONFIGURATION ---
+// --- INFLUXDB CONFIGURATION (depuis .env) ---
+// Les variables VITE_* sont injectées par Vite au moment du build/dev.
+// Créez un fichier .env à la racine du dashboard (voir .env.example).
 const hostIp = window.location.hostname || 'localhost'
-const influxURL = `http://${hostIp}:8086`
-const influxToken = 'O6KdiXqBpyFcH1PlGx2GkVWjaUz6ptHEdA7nAwZsGA-DtC_un7iuWinrxczOF79ss1cb5ItgvqLjjRyaKDNXLQ=='
-const influxOrg = '2fb3ec77104ac02e'
-const influxBucket = 'polebot_data'
+const influxURL  = import.meta.env.VITE_INFLUX_URL  || `http://${hostIp}:8086`
+const influxToken  = import.meta.env.VITE_INFLUX_TOKEN  || ''
+const influxOrg    = import.meta.env.VITE_INFLUX_ORG    || ''
+const influxBucket = import.meta.env.VITE_INFLUX_BUCKET || 'polebot_data'
+
+// Avertissement si les credentials sont manquants
+if (!influxToken || !influxOrg) {
+  console.warn('[useInfluxDB] Credentials manquants — créez un fichier .env (voir .env.example)')
+}
 
 export const influxDB = new InfluxDB({ url: influxURL, token: influxToken })
 export const writeApi = influxDB.getWriteApi(influxOrg, influxBucket, 'ms')
+
+// --- État global des erreurs InfluxDB ---
+export const influxError = ref(null) // null = OK, sinon { message, time }
+
+/** Helper : écrit un point et expose l'erreur si ça échoue. */
+export function writePointSafe(point) {
+  try {
+    writeApi.writePoint(point)
+    writeApi.flush().then(() => {
+      influxError.value = null // succès — réinitialise l'erreur
+    }).catch(err => {
+      console.error('[InfluxDB] Erreur écriture:', err)
+      influxError.value = { message: err?.message || 'Erreur InfluxDB', time: new Date().toLocaleTimeString() }
+    })
+  } catch (err) {
+    console.error('[InfluxDB] Erreur synchrone:', err)
+    influxError.value = { message: err?.message || 'Erreur InfluxDB', time: new Date().toLocaleTimeString() }
+  }
+}
 
 // --- Singleton state ---
 export const selectedRobotId = ref('polebot_01')
@@ -388,19 +414,11 @@ export function useInfluxDB() {
 
   function saveSessionToInflux(durationSeconds, startTimeISO) {
     if (!writeApi) return
-
-    // Create a new measurement named "robot_session"
     const point = new Point('robot_session')
       .tag('robot_id', selectedRobotId.value)
       .stringField('start_time', startTimeISO)
-      .intField('duration_s', durationSeconds);
-
-    writeApi.writePoint(point);
-
-    // Call ".flush()" to force immediate dispatch to InfluxDB server
-    writeApi.flush().then(() => {
-      console.log("⌚ Session saved in InfluxDB:", durationSeconds, "seconds");
-    }).catch(err => { console.error("Error during session write to InfluxDB:", err); });
+      .intField('duration_s', durationSeconds)
+    writePointSafe(point)
   }
 
   async function fetchRobotSessions() {
@@ -470,6 +488,7 @@ export function useInfluxDB() {
     movementEfficiency,
     stabilityIndex,
     sessionHistory,
+    influxError,
     // Functions
     fetchAndDrawChart,
     openAnalytics,
@@ -483,6 +502,7 @@ export function useInfluxDB() {
     fetchCycleTimes,
     saveSessionToInflux,
     fetchRobotSessions,
+    writePointSafe,
     // InfluxDB instances (pour App.vue setInterval)
     influxDB,
     writeApi

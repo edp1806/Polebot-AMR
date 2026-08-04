@@ -44,7 +44,7 @@ function handleReset() {
       <div style="display:flex; gap:15px; align-items:center;">
         <h2 style="margin:0;">📊 InfluxDB History (Full Session)</h2>
         <select v-model="selectedRobotId" @change="fetchAndDrawChart" style="padding:4px 8px; border-radius:6px; background:var(--bg-secondary); color:var(--text-primary); border:1px solid var(--border-color); font-size:12px; cursor:pointer;">
-          <option value="polebot_01">🤖 polebot_01</option>
+          <option value="polebot_01">polebot_01</option>
         </select>
       </div>
       <button class="btn btn-reset" @click="handleReset" style="padding: 5px 10px; font-size:11px;">

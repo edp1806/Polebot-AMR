@@ -44,9 +44,21 @@ install(
 )
 
 install(
+  PROGRAMS src/${PROJECT_NAME}/rplidar_publisher.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME rplidar_publisher
+)
+
+install(
   PROGRAMS src/${PROJECT_NAME}/lidar_to_csv.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME lidar_to_csv
+)
+
+install(
+  PROGRAMS src/${PROJECT_NAME}/serial_bridge.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME serial_bridge
 )
 
 ament_package()

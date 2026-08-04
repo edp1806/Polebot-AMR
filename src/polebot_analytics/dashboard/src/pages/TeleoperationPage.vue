@@ -57,7 +57,16 @@ onUnmounted(() => stopVel())
 
         <!-- Logo / Titre -->
         <div class="login-header">
-          <div class="login-logo">🤖</div>
+          <div class="login-logo" style="display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; margin: 0 auto 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 14px;">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="color: var(--accent-blue, #3b82f6);">
+              <rect x="3" y="6" width="18" height="12" rx="3" stroke="currentColor" stroke-width="2"/>
+              <circle cx="7" cy="18" r="2" fill="currentColor"/>
+              <circle cx="17" cy="18" r="2" fill="currentColor"/>
+              <path d="M8 12H16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <path d="M12 3V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="12" cy="3" r="1.5" fill="currentColor"/>
+            </svg>
+          </div>
           <h1 class="login-title">Polebot AMR</h1>
           <p class="login-subtitle">Restricted Access — Teleoperation</p>
         </div>

@@ -51,7 +51,7 @@ const addToast = (message, type = 'info') => {
 const { battery, usageTime, sessionStartTime, resetUsageTime, updateBattery } = useBattery()
 const { connected, connecting, odom, connectRos: _connectRos, disconnectRos: _disconnectRos, connectionPing, isLowBandwidthMode, proximityWarning } = useRos()
 const { isEStopActive, stopVel, addLog } = useControl()
-const { selectedRobotId, openAnalytics, writeApi, saveSessionToInflux } = useInfluxDB()
+const { selectedRobotId, openAnalytics, writeApi, saveSessionToInflux, influxError } = useInfluxDB()
 const { currentScan, drawMap, drawLidar } = useMap()
 
 // --- App.vue local variables ---
@@ -95,6 +95,13 @@ watch(battery, (val) => {
     batteryWarned = true
   } else if (val >= 20) {
     batteryWarned = false
+  }
+})
+
+// Notification visuelle si InfluxDB échoue
+watch(influxError, (err) => {
+  if (err) {
+    addToast(`⚠️ InfluxDB write error: ${err.message}`, 'error')
   }
 })
 
@@ -174,7 +181,16 @@ setInterval(() => {
     <!-- LOGIN OVERLAY -->
     <div v-if="!isAuthenticated" style="position: absolute; top:0; left:0; width: 100vw; height: 100vh; background: var(--bg-main); display: flex; align-items: center; justify-content: center; z-index: 10000;">
       <div class="card" style="width: 380px; padding: 40px; display: flex; flex-direction: column; gap: 20px; align-items: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
-        <div style="font-size: 40px;">🤖</div>
+        <div style="display: flex; align-items: center; justify-content: center; width: 64px; height: 64px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 16px;">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="color: var(--accent-blue, #3b82f6);">
+            <rect x="3" y="6" width="18" height="12" rx="3" stroke="currentColor" stroke-width="2"/>
+            <circle cx="7" cy="18" r="2" fill="currentColor"/>
+            <circle cx="17" cy="18" r="2" fill="currentColor"/>
+            <path d="M8 12H16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M12 3V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="12" cy="3" r="1.5" fill="currentColor"/>
+          </svg>
+        </div>
         <div style="text-align: center;">
           <h2 style="font-size: 22px; color: var(--text-primary); margin: 0;">Polebot AMR</h2>
           <p style="font-size: 13px; color: var(--text-muted); margin-top: 5px;">Restricted Access Dashboard</p>
@@ -213,8 +229,17 @@ setInterval(() => {
     <!-- LEFT SIDEBAR -->
     <aside style="width: 260px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; z-index: 10;">
       <!-- Brand / Logo -->
-      <div style="padding: 20px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 10px;">
-        <div style="font-size: 26px;">🤖</div>
+      <div style="padding: 20px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 12px;">
+        <div style="display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 10px;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="color: var(--accent-blue, #3b82f6);">
+            <rect x="3" y="6" width="18" height="12" rx="3" stroke="currentColor" stroke-width="2"/>
+            <circle cx="7" cy="18" r="2" fill="currentColor"/>
+            <circle cx="17" cy="18" r="2" fill="currentColor"/>
+            <path d="M8 12H16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M12 3V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="12" cy="3" r="1.5" fill="currentColor"/>
+          </svg>
+        </div>
         <div>
           <h1 style="margin: 0; font-size: 16px; font-weight: 700; color: var(--text-primary); letter-spacing: 0.5px;">Polebot AMR</h1>
           <div style="font-size: 11px; color: var(--accent-blue); font-weight: 600; text-transform: uppercase; letter-spacing: 1px;">Fleet Manager</div>
