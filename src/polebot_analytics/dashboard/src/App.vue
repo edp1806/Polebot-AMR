@@ -98,7 +98,7 @@ watch(battery, (val) => {
   }
 })
 
-// Notification visuelle si InfluxDB échoue
+// Visual notification if InfluxDB write fails
 watch(influxError, (err) => {
   if (err) {
     addToast(`⚠️ InfluxDB write error: ${err.message}`, 'error')

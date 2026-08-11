@@ -91,7 +91,7 @@ let missionTimer = null
 
 function startMissionTracker() {
   missionStartTime.value = Date.now()
-  addLog("🏁 Mission manuelle démarrée !", 'success')
+  addLog("🏁 Manual mission started!", 'success')
   
   missionTimer = setInterval(() => {
     const elapsed = Math.floor((Date.now() - missionStartTime.value) / 1000)
@@ -106,7 +106,7 @@ function endMissionTracker() {
   clearInterval(missionTimer)
   
   const finalTime = missionCycleTime.value
-  addLog(`✅ Mission terminée. Cycle Time : ${finalTime}`, 'success')
+  addLog(`✅ Mission completed. Cycle Time: ${finalTime}`, 'success')
   
   if (writeApi) {
     const parts = finalTime.split(':')
@@ -175,7 +175,7 @@ onUnmounted(() => {
 
 <template>
   <div class="live-control-container">
-    <!-- Visual HUD Screen Alert Overlay (Fermeture au clic ou après 5s) -->
+    <!-- Visual HUD Screen Alert Overlay (click to close or auto-dismiss after 5s) -->
     <div v-if="screenAlert" class="hud-overlay" @click.stop="screenAlert = null">
       <div class="hud-card" :class="{ 'estop-card': screenAlert.type === 'estop', 'proximity-card': screenAlert.type === 'proximity', 'cancel-card': screenAlert.type === 'cancel' }">
         <div class="hud-header">
@@ -188,7 +188,7 @@ onUnmounted(() => {
         <div class="hud-footer">
           <span>Click to close or wait 5s...</span>
         </div>
-        <!-- Barre de chargement qui rétrécit -->
+        <!-- Shrinking progress bar -->
         <div class="progress-bar">
           <div class="progress-fill"></div>
         </div>
@@ -621,7 +621,7 @@ onUnmounted(() => {
   100% { transform: translate(1px, -2px) rotate(0deg); }
 }
 
-/* Fond flouté couvrant tout l'écran */
+/* Blurred overlay covering the full screen */
 .hud-overlay {
   position: fixed;
   top: 0;
@@ -690,7 +690,7 @@ onUnmounted(() => {
   color: var(--text-muted);
 }
 
-/* Barre de progression défilante (5 secondes) */
+/* Scrolling progress bar (5 seconds) */
 .progress-bar {
   position: absolute;
   bottom: 0;
@@ -711,18 +711,18 @@ onUnmounted(() => {
   background: var(--accent-yellow);
 }
 
-/* À insérer dans ta balise <style scoped> (par exemple sous les règles .proximity-card) */
+/* Cancel card styles */
 
 .cancel-card {
-  border-color: rgba(59, 130, 246, 0.6); /* Bordure bleue */
-  box-shadow: 0 0 40px rgba(59, 130, 246, 0.35), 0 24px 64px rgba(0, 0, 0, 0.7); /* Lueur bleue */
+  border-color: rgba(59, 130, 246, 0.6); /* Blue border */
+  box-shadow: 0 0 40px rgba(59, 130, 246, 0.35), 0 24px 64px rgba(0, 0, 0, 0.7); /* Blue glow */
 }
 
 .cancel-card .progress-fill {
-  background: var(--accent-blue); /* Barre de chargement bleue */
+  background: var(--accent-blue); /* Blue progress bar */
 }
 
-/* Encadré identique aux autres cartes de la colonne */
+/* Card identical to other column cards */
 .map-control-card {
   border: 1px solid var(--border-color) !important;
   background: var(--bg-card) !important;

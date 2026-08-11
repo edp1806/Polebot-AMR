@@ -2,39 +2,39 @@ import { ref } from 'vue'
 import { InfluxDB, Point } from '@influxdata/influxdb-client'
 import Chart from 'chart.js/auto'
 
-// --- INFLUXDB CONFIGURATION (depuis .env) ---
-// Les variables VITE_* sont injectées par Vite au moment du build/dev.
-// Créez un fichier .env à la racine du dashboard (voir .env.example).
+// --- INFLUXDB CONFIGURATION (from .env) ---
+// VITE_* variables are injected by Vite at build/dev time.
+// Create a .env file at the dashboard root (see .env.example).
 const hostIp = window.location.hostname || 'localhost'
 const influxURL  = import.meta.env.VITE_INFLUX_URL  || `http://${hostIp}:8086`
 const influxToken  = import.meta.env.VITE_INFLUX_TOKEN  || ''
 const influxOrg    = import.meta.env.VITE_INFLUX_ORG    || ''
 const influxBucket = import.meta.env.VITE_INFLUX_BUCKET || 'polebot_data'
 
-// Avertissement si les credentials sont manquants
+// Warning if credentials are missing
 if (!influxToken || !influxOrg) {
-  console.warn('[useInfluxDB] Credentials manquants — créez un fichier .env (voir .env.example)')
+  console.warn('[useInfluxDB] Missing credentials — please create a .env file (see .env.example)')
 }
 
 export const influxDB = new InfluxDB({ url: influxURL, token: influxToken })
 export const writeApi = influxDB.getWriteApi(influxOrg, influxBucket, 'ms')
 
-// --- État global des erreurs InfluxDB ---
-export const influxError = ref(null) // null = OK, sinon { message, time }
+// --- Global InfluxDB error state ---
+export const influxError = ref(null) // null = OK, otherwise { message, time }
 
-/** Helper : écrit un point et expose l'erreur si ça échoue. */
+/** Helper: writes a point and exposes the error if it fails. */
 export function writePointSafe(point) {
   try {
     writeApi.writePoint(point)
     writeApi.flush().then(() => {
-      influxError.value = null // succès — réinitialise l'erreur
+      influxError.value = null // success — reset error
     }).catch(err => {
-      console.error('[InfluxDB] Erreur écriture:', err)
-      influxError.value = { message: err?.message || 'Erreur InfluxDB', time: new Date().toLocaleTimeString() }
+      console.error('[InfluxDB] Write error:', err)
+      influxError.value = { message: err?.message || 'InfluxDB error', time: new Date().toLocaleTimeString() }
     })
   } catch (err) {
-    console.error('[InfluxDB] Erreur synchrone:', err)
-    influxError.value = { message: err?.message || 'Erreur InfluxDB', time: new Date().toLocaleTimeString() }
+    console.error('[InfluxDB] Synchronous error:', err)
+    influxError.value = { message: err?.message || 'InfluxDB error', time: new Date().toLocaleTimeString() }
   }
 }
 
@@ -135,7 +135,7 @@ export function useInfluxDB() {
         }
       },
       error(error) {
-        console.error("Erreur de requête InfluxDB:", error)
+        console.error("InfluxDB query error:", error)
       },
       complete() {
         chartDataCache = { labels, battery: batteryData, linear: linearSpeedData, angular: angularSpeedData, trajectory: trajectoryData, posX: posXData, posY: posYData }
@@ -351,7 +351,7 @@ export function useInfluxDB() {
     }, 50)
   }
 
-  // --- REQUÊTE CYCLE TIME ---
+  // --- CYCLE TIME QUERY ---
   async function fetchCycleTimes() {
     if (!influxDB || !selectedRobotId.value) return
     const queryApi = influxDB.getQueryApi(influxOrg)
