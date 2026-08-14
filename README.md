@@ -1,6 +1,9 @@
-# polman-dsk-ros2-amr
-Autonomous Mobile Robot (AMR) using ROS2 framework developed in Bandung Polytechnic for Manufacturing (Polman Bandung)
+# 🤖 Polebot AMR — Web Dashboard & Analytics Platform
+Autonomous Mobile Robot (AMR) using ROS2 framework, developed at Bandung Polytechnic for Manufacturing (Polman Bandung).
 
+> 📖 **Quick Start?** See the [Startup Guide](STARTUP_GUIDE.md) for step-by-step instructions to launch the robot, simulation, and web dashboard.
+
+---
 
 ### **Polebot AMR: System Setup & Deployment Guide**
 
